@@ -2,13 +2,22 @@
 -- db/schema/002_core.sql
 -- CORE layer: clean, normalized tables the dashboard reads from.
 --
--- Big idea: history belongs to the FRANCHISE (rulebook 3.3), keyed by
--- the brand-registry code (DET, FLT, GRR...). Owners, Sleeper roster_ids
--- and team names hang off franchise_season, so ownership changes,
--- renames and the ESPN-era 2020 season all fit the same shape.
+-- Big ideas:
+--   * History belongs to the FRANCHISE (rulebook 3.3), keyed by the
+--     3-letter code the league uses (DET, FLT, GRR...). Owners, Sleeper
+--     roster_ids and team names hang off franchise_season.
+--   * Two layers of game results:
+--       - core.game          = the OFFICIAL league record (from the
+--                              All-In-One workbook, plus Sleeper scores
+--                              where the season policy says so)
+--       - core.team_week /   = exactly what Sleeper reports, down to
+--         core.player_week     every player's points and lineup slot
+--     Standings, champions and the record book read core.game.
+--     Lineup analysis reads team_week / player_week.
 --
 -- Natural primary keys everywhere so loaders can upsert safely.
 -- Safe to re-run: everything uses IF NOT EXISTS.
+-- To rebuild from scratch, run db/reset_core.sql first.
 -- =====================================================================
 
 create schema if not exists core;
@@ -29,13 +38,13 @@ create table if not exists core.franchise (
     notes           text
 );
 comment on table core.franchise is
-    'One row per franchise, keyed by brand-registry code. Owns all team history, records and trophies (rulebook 3.3).';
+    'One row per franchise, keyed by the league''s 3-letter code. Owns all team history, records and trophies (rulebook 3.3).';
 
 
 create table if not exists core.owner (
     owner_id         integer generated always as identity primary key,
     sleeper_user_id  text unique,        -- main identity for 2021+
-    espn_member_id   text unique,        -- for the 2020 ESPN season, if the sheet has it
+    espn_member_id   text unique,        -- for the 2020 ESPN season, if we ever get it
     display_name     text,               -- latest Sleeper display name
     real_name        text,               -- fill in by hand
     nickname         text,               -- fill in by hand
@@ -43,12 +52,14 @@ create table if not exists core.owner (
         check (sleeper_user_id is not null or espn_member_id is not null or real_name is not null)
 );
 comment on table core.owner is
-    'People who have run a franchise. Tracked by Sleeper user_id across seasons, plus ESPN id or name for 2020.';
+    'People who have run a franchise. Tracked by Sleeper user_id across seasons.';
 
 
 create table if not exists core.season (
     season                      smallint primary key,
     platform                    text     not null check (platform in ('espn', 'sleeper')),
+    official_scores_from        text     not null default 'sleeper'
+                                         check (official_scores_from in ('sheet', 'sleeper')),
     sleeper_league_id           text unique,
     sleeper_previous_league_id  text,
     sleeper_draft_id            text,
@@ -61,7 +72,9 @@ create table if not exists core.season (
     updated_at                  timestamptz not null default now()
 );
 comment on table core.season is
-    'One row per league season (2020 ESPN, 2021+ Sleeper) with that season''s league-level settings.';
+    'One row per league season (2020 ESPN, 2021+ Sleeper). official_scores_from says whose scores are official that year.';
+comment on column core.season.official_scores_from is
+    'sheet = workbook scores are official (2020, 2023). sleeper = Sleeper scores are official unless the workbook has a different winner.';
 
 
 create table if not exists core.scoring_setting (
@@ -85,17 +98,11 @@ comment on table core.roster_slot is
 
 
 create table if not exists core.keeper_rule (
-    season                  smallint primary key references core.season,
-    total_keepers           smallint not null,
-    unrestricted_keepers    smallint not null default 0,  -- Captains in 2023-2026
-    restricted_keepers      smallint not null default 0,
-    restricted_banned_rounds smallint[],                  -- rounds a restricted keeper can't come from
-    restricted_costs_pick   boolean  not null default false, -- give up the pick the player was drafted with last year
-    notes                   text,
-    constraint ck_keeper_counts check (unrestricted_keepers + restricted_keepers = total_keepers)
+    season         smallint primary key references core.season,
+    total_keepers  smallint not null,
+    notes          text
 );
-comment on table core.keeper_rule is
-    'Keeper rules per season (3 restricted in 2021-22, 2 Captains + 2 restricted in 2023-26). Hand-maintained.';
+comment on table core.keeper_rule is 'How many players each team could keep, per season. Hand-maintained.';
 
 
 create table if not exists core.franchise_season (
@@ -107,7 +114,7 @@ create table if not exists core.franchise_season (
     division_number          smallint,
     division_name            text,
     conference               text,
-    -- Sleeper's own season totals from /rosters. Used ONLY to validate our numbers.
+    -- Sleeper's own season totals from /rosters. Used ONLY to validate the Sleeper load.
     reported_wins            smallint,
     reported_losses          smallint,
     reported_ties            smallint,
@@ -138,7 +145,7 @@ create table if not exists core.player (
     rookie_year        smallint,
     college            text,
     gsis_id            text,              -- nflverse key, filled in Phase 3
-    espn_id            text,              -- helps match the 2020 ESPN season
+    espn_id            text,
     yahoo_id           text,
     sportradar_id      text,
     is_stub            boolean not null default false,  -- id showed up in league data but not in /players/nfl
@@ -152,7 +159,50 @@ create index if not exists ix_player_gsis on core.player (gsis_id);
 
 
 -- =====================================================================
--- 3. WEEKLY RESULTS (the most important tables)
+-- 3. OFFICIAL GAME RECORD (from the All-In-One workbook)
+-- =====================================================================
+
+create table if not exists core.game (
+    game_id                 text         primary key,  -- workbook Game ID, e.g. '2025-15-DET-OAK'
+    season                  smallint     not null references core.season,
+    week                    smallint     not null check (week between 1 and 18),
+    game_type               text         not null check (game_type in ('regular', 'playoff', 'consolation')),
+    designation             text,        -- workbook Special Designation: Fantasy Bowl, 3rd Place Bowl, 1st Round, IST Game...
+    team1_code              text         not null,     -- alphabetical order, same as the Game ID
+    team2_code              text         not null,
+    team1_points            numeric(7,2),              -- official score; null when only the winner is known
+    team2_points            numeric(7,2),
+    winner_code             text,                      -- null = no winner (tie or co-champions)
+    points_source           text         not null check (points_source in ('sheet', 'sleeper')),
+    result_note             text,                      -- why the result is special (co-champions, placeholder scores...)
+    international_location  text,                      -- country, for international games
+    is_game_of_week         boolean      not null default false,
+    is_division_game        boolean      not null default false,
+    is_conference_game      boolean      not null default false,
+    constraint ck_game_team_order check (team1_code < team2_code),
+    constraint ck_game_winner check (winner_code is null or winner_code in (team1_code, team2_code)),
+    constraint uq_game_teams unique (season, week, team1_code, team2_code),
+    foreign key (season, team1_code) references core.franchise_season,
+    foreign key (season, team2_code) references core.franchise_season
+);
+comment on table core.game is
+    'The OFFICIAL league game record, one row per game, 2020 to now. Built from the All-In-One workbook (plus Sleeper scores where the season policy says so). Standings and champions read from here.';
+
+create index if not exists ix_game_season_week on core.game (season, week);
+
+
+create table if not exists core.game_override (
+    game_id       text    primary key,     -- workbook Game ID
+    winner_code   text,                    -- official winner; null = no winner (tie / co-champions)
+    scores_known  boolean not null default true,  -- false = workbook scores are placeholders, keep the winner only
+    reason        text    not null
+);
+comment on table core.game_override is
+    'Hand-entered official results the loader applies on top of the workbook (2022 co-champions, 2020 placeholder scores). Lives in the seed file.';
+
+
+-- =====================================================================
+-- 4. SLEEPER WEEKLY DETAIL (exactly what Sleeper reports)
 -- =====================================================================
 
 create table if not exists core.team_week (
@@ -162,14 +212,14 @@ create table if not exists core.team_week (
     sleeper_roster_id    smallint,
     matchup_id           smallint,     -- rows sharing season+week+matchup_id played each other; null = no game
     points               numeric(7,2) not null,   -- Sleeper 'points'
-    custom_points        numeric(7,2),            -- Sleeper commissioner override field; null in every sample so far
+    custom_points        numeric(7,2), -- Sleeper commissioner override field; null in every sample so far
     empty_starter_slots  smallint     not null default 0,
-    source               text         not null default 'sleeper' check (source in ('sleeper', 'espn', 'manual')),
+    source               text         not null default 'sleeper' check (source in ('sleeper', 'manual')),
     primary key (season, week, franchise_code),
     foreign key (season, franchise_code) references core.franchise_season
 );
 comment on table core.team_week is
-    'Each franchise''s score every week. Opponent and W/L come from pairing on matchup_id (see core.v_team_week_result).';
+    'Each franchise''s score every week exactly as Sleeper reports it. Official results live in core.game.';
 
 create index if not exists ix_team_week_matchup on core.team_week (season, week, matchup_id);
 
@@ -189,27 +239,14 @@ create table if not exists core.player_week (
     constraint ck_starter_slot check (is_starter = (lineup_slot <> 'BN'))
 );
 comment on table core.player_week is
-    'Every rostered player''s fantasy points each week, whether they started, and which lineup slot they filled.';
+    'Every rostered player''s Sleeper fantasy points each week, whether they started, and which lineup slot they filled.';
 
 create index if not exists ix_player_week_player on core.player_week (player_id);
 
 
-create table if not exists core.result_override (
-    season           smallint     not null,
-    week             smallint     not null,
-    franchise_code   text         not null,
-    official_result  char(1)      not null check (official_result in ('W', 'L', 'T')),
-    official_points  numeric(7,2),          -- only if the official score differs from Sleeper
-    reason           text         not null, -- e.g. 'Madden tiebreak (rulebook 11.4)'
-    primary key (season, week, franchise_code),
-    foreign key (season, week, franchise_code) references core.team_week
-);
-comment on table core.result_override is
-    'Rare cases where the official league result differs from Sleeper (rulebook 11.4 and 11.6). One row is enough; the opponent''s result flips automatically. Expected to stay empty.';
-
-
 -- =====================================================================
--- 4. PLAYOFFS
+-- 5. PLAYOFFS (Sleeper's bracket, for reference)
+-- Official places and bowl names come from core.game.designation.
 -- =====================================================================
 
 create table if not exists core.playoff_game (
@@ -226,8 +263,7 @@ create table if not exists core.playoff_game (
     team2_original_code  text,
     winner_code          text,
     loser_code           text,
-    place_decided        smallint,           -- Sleeper 'p'
-    bowl_name            text,               -- league name for the game (Fantasy Bowl, Mud Bowl...), filled by hand
+    place_decided        smallint,           -- Sleeper 'p' (NOT the league's official place)
     primary key (season, bracket, match_id),
     foreign key (season, team1_code)          references core.franchise_season,
     foreign key (season, team2_code)          references core.franchise_season,
@@ -237,21 +273,21 @@ create table if not exists core.playoff_game (
     foreign key (season, loser_code)          references core.franchise_season
 );
 comment on table core.playoff_game is
-    'Winners and losers bracket games from Sleeper, plus league bowl names. Source for champions and final places.';
+    'Sleeper''s winners and losers brackets as Sleeper ran them. Reference only: the league''s official postseason is in core.game.';
 
 
 -- =====================================================================
--- 5. DRAFTS AND KEEPERS
+-- 6. DRAFTS AND KEEPERS
 -- =====================================================================
 
 create table if not exists core.draft (
-    draft_id    text     primary key,   -- Sleeper draft_id ('espn-2020' style for ESPN)
+    draft_id    text     primary key,   -- Sleeper draft_id ('workbook-2020' style for the 2020 draft)
     season      smallint not null references core.season,
     draft_type  text,                   -- snake, linear, auction
     rounds      smallint,
     status      text,
     started_at  timestamptz,
-    source      text     not null default 'sleeper' check (source in ('sleeper', 'espn', 'manual'))
+    source      text     not null default 'sleeper' check (source in ('sleeper', 'sheet', 'manual'))
 );
 comment on table core.draft is 'One row per league draft.';
 
@@ -264,30 +300,27 @@ create table if not exists core.draft_pick (
     draft_slot      smallint,
     franchise_code  text     not null,   -- team that made the pick
     player_id       text     references core.player,
-    is_keeper       boolean  not null default false,  -- Sleeper flag; keepers sit in the last rounds, so round here is NOT keeper cost
+    is_keeper       boolean  not null default false,
     primary key (draft_id, pick_no),
     foreign key (season, franchise_code) references core.franchise_season
 );
-comment on table core.draft_pick is 'Every draft pick. Keeper costs live in core.keeper, not here.';
+comment on table core.draft_pick is 'Every draft pick. Sleeper places keepers in the last rounds, so round is not a keeper cost.';
 
 
 create table if not exists core.keeper (
     season           smallint not null,
     franchise_code   text     not null,
     player_id        text     not null references core.player,
-    keeper_type      text     not null check (keeper_type in ('captain', 'restricted', 'unrestricted')),
-    cost_round       smallint,          -- round of the pick given up (restricted keepers)
-    name_as_entered  text,              -- name exactly as typed in the keeper spreadsheet
+    name_as_entered  text,              -- name exactly as typed in the workbook
     notes            text,
     primary key (season, franchise_code, player_id),
     foreign key (season, franchise_code) references core.franchise_season
 );
-comment on table core.keeper is
-    'Players kept each season and how (Captain vs restricted keeper). Imported from the keeper spreadsheet.';
+comment on table core.keeper is 'Players kept each season. Imported from the workbook''s Keepers sheet.';
 
 
 -- =====================================================================
--- 6. TRANSACTIONS
+-- 7. TRANSACTIONS
 -- =====================================================================
 
 create table if not exists core.transaction (
@@ -340,18 +373,33 @@ comment on table core.transaction_faab is 'FAAB sent between teams in a trade.';
 
 
 -- =====================================================================
--- 7. AWARDS
+-- 8. AWARDS AND POWER RANKINGS (from the workbook)
 -- =====================================================================
 
 create table if not exists core.award (
     award_id                integer generated always as identity primary key,
     season                  smallint not null references core.season,
-    award_name              text     not null,  -- 'First Team All-Fantasy', 'Most Valuable Owner'...
+    award_name              text     not null,  -- 'First Team All-Fantasy', 'Fantasy Bowl', 'Commissioners Cup'...
     franchise_code          text     references core.franchise,
     player_id               text     references core.player,
-    player_name_as_entered  text,
+    player_name_as_entered  text,               -- null for team awards
     position                text,
+    conference              text,               -- team awards: AFC / NFC
+    award_group             text,               -- team awards: division name, or In-Season Tournament group
+    is_traveling_trophy     boolean  not null default false,
     notes                   text,
-    constraint uq_award unique nulls not distinct (season, award_name, franchise_code, player_name_as_entered)
+    constraint uq_award unique nulls not distinct (season, award_name, franchise_code, player_name_as_entered, award_group)
 );
-comment on table core.award is 'League awards and honors by season, imported from the award history spreadsheet.';
+comment on table core.award is 'Individual and team awards by season, from the workbook''s award sheets.';
+
+
+create table if not exists core.power_ranking (
+    season          smallint not null references core.season,
+    week            smallint not null,   -- ranking published before this week's games; week 1 = preseason
+    rank            smallint not null check (rank between 1 and 4),
+    franchise_code  text     not null,
+    primary key (season, week, rank),
+    constraint uq_power_ranking_team unique (season, week, franchise_code),
+    foreign key (season, franchise_code) references core.franchise_season
+);
+comment on table core.power_ranking is 'Weekly top-4 power rankings from the workbook. Week 1 is the preseason ranking.';

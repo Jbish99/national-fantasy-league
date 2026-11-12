@@ -48,3 +48,23 @@ from raw.sleeper_response
 order by request_url, last_pulled_at desc, response_id desc;
 
 comment on view raw.v_sleeper_latest is 'Most recent response for each Sleeper URL.';
+
+
+-- ---------------------------------------------------------------------
+-- raw.workbook_row
+-- Every data row from the league's history workbook (All-In-One.xlsx),
+-- one row per spreadsheet row, stored as {column header: value}.
+-- etl/load_workbook.py replaces a sheet's rows each time it runs.
+-- ---------------------------------------------------------------------
+create table if not exists raw.workbook_row (
+    workbook     text        not null,  -- file name, e.g. 'All-In-One.xlsx'
+    sheet        text        not null,  -- 'Scores', 'Draft', 'Rankings', ...
+    row_number   integer     not null,  -- the row number you'd see in Excel
+    data         jsonb       not null,  -- {"Game ID": "2025-15-DET-OAK", "Year": 2025, ...}
+    file_sha256  text        not null,  -- fingerprint of the file this came from
+    loaded_at    timestamptz not null default now(),
+    primary key (workbook, sheet, row_number)
+);
+
+comment on table raw.workbook_row is
+    'Rows from the official league history workbook (All-In-One.xlsx), stored as-is per sheet.';

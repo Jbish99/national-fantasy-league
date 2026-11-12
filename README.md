@@ -58,17 +58,32 @@ In DBeaver (connected with the **unpooled** host, the one without `-pooler`), ru
 4. `db/checks/001_validation.sql`
 5. `db/seed/001_reference_data.sql`
 
-Check: `select * from qa.summary;` → 8 rows, all `0`.
+Check: `select * from qa.summary;` → 14 rows, all `0`.
 
-## 4. Pull Sleeper history (safe to re-run anytime)
+**Rebuilding after a schema change:** run `db/reset_core.sql` first, then the 5 files above, then the loaders again.
+It drops only the `core` and `qa` schemas; everything already pulled into `raw` stays.
+
+## 4. Load the raw data (safe to re-run anytime)
 
 ```
 python -m etl.pull_sleeper
+python -m etl.load_workbook
 ```
-Saves every Sleeper response for every season into `raw.sleeper_response` (a couple of minutes).
-Options: `--season 2026` (one season), `--skip-players`, `--refresh-players`.
+- `pull_sleeper` saves every Sleeper response for every season into `raw.sleeper_response` (a couple of minutes).
+  Options: `--season 2026` (one season), `--skip-players`, `--refresh-players`.
+- `load_workbook` copies the official history workbook (`data/manual/All-In-One.xlsx`) into `raw.workbook_row`.
+  When the workbook is updated, download it as .xlsx, replace that file, and run it again.
 
-Then run `db/checks/002_phase2_field_checks.sql` in DBeaver to see what came in.
+Then run `db/checks/002_phase2_field_checks.sql` in DBeaver to see what came in from Sleeper.
+
+## Where the official history comes from
+
+- **`core.game`** is the official record of every game (2020 →). It's built from the All-In-One workbook.
+  For seasons marked `sleeper` in `core.season.official_scores_from`, scores come from Sleeper (they include
+  stat corrections) unless the workbook names a different winner. 2020 and 2023 use the workbook's scores.
+- **`core.game_override`** (in the seed file) holds hand-decided results: the 2022 co-champions and the 2020
+  consolation games where only the winner is known.
+- **`core.team_week` / `core.player_week`** are exactly what Sleeper reports, for lineup and player analysis.
 
 ---
 
@@ -80,9 +95,10 @@ Then run `db/checks/002_phase2_field_checks.sql` in DBeaver to see what came in.
 requirements.txt     Python packages
 db/schema/           numbered SQL files, run in order
 db/checks/           validation views (qa schema): each returns only problem rows
-db/seed/             hand-maintained reference data (franchises, seasons, keeper rules)
+db/seed/             hand-maintained reference data (franchises, seasons, keeper rules, result overrides)
+db/reset_core.sql    drops core + qa for a clean rebuild (raw is kept)
 etl/                 scripts that pull from the APIs and load the database
-data/manual/         hand-maintained CSVs (keepers, 2020 ESPN season, awards...)
+data/manual/         All-In-One.xlsx (the official league history workbook) and other hand-kept files
 data/cache/          big downloads like Sleeper /players/nfl (git-ignored)
 app/                 Streamlit app (coming in Phase 4)
 ```
@@ -90,7 +106,7 @@ app/                 Streamlit app (coming in Phase 4)
 ## Build phases
 
 1. Database + schema ✅
-2. Sleeper history backfill + validation ← in progress (step 1: raw pull)
+2. History backfill + validation ← in progress (raw loads done; core loader next)
 3. NFL stats + player ID mapping
 4. Streamlit first version
 5. Deploy
