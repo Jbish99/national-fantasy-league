@@ -76,6 +76,22 @@ python -m etl.load_workbook
 
 Then run `db/checks/002_phase2_field_checks.sql` in DBeaver to see what came in from Sleeper.
 
+## 5. Build the clean tables (safe to re-run anytime)
+
+```
+python -m etl.load_core
+```
+Fills every `core` table from the raw data, step by step (seasons, owners, players, weeks, games, playoffs,
+drafts, transactions, rankings, awards), then prints any `qa` checks that found something.
+Run one step on its own with `--step games` (repeatable), but run them all the first time.
+
+Then in DBeaver: `select * from qa.summary;`
+- `custom_points_used` = 2 is expected: Sleeper's commissioner override on the 2022 Fantasy Bowl.
+- `stub_players` = a few is fine: player ids Sleeper's player list doesn't have anymore.
+- Anything else non-zero: look at `select * from qa.<check_name>;`
+
+Typical update after new games or a new workbook version: `pull_sleeper` → `load_workbook` → `load_core`.
+
 ## Where the official history comes from
 
 - **`core.game`** is the official record of every game (2020 →). It's built from the All-In-One workbook.
@@ -106,7 +122,7 @@ app/                 Streamlit app (coming in Phase 4)
 ## Build phases
 
 1. Database + schema ✅
-2. History backfill + validation ← in progress (raw loads done; core loader next)
+2. History backfill + validation ← in progress (core loader done; keepers + 2020 draft + player-name matching next)
 3. NFL stats + player ID mapping
 4. Streamlit first version
 5. Deploy

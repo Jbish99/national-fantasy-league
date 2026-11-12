@@ -51,6 +51,9 @@ comment on view qa.matchup_pairs is 'A Sleeper matchup_id that does not have exa
 
 -- 3. Season W/L/T and points computed from Sleeper's weekly scores match
 --    Sleeper's own /rosters totals (completed Sleeper seasons).
+--    2023 is skipped on purpose: Sleeper's 2023 /rosters season totals don't match
+--    its own weekly scores (found 2026-11-12). The weekly scores match the workbook
+--    for 192 of 196 team-weeks, so the weekly numbers are the trustworthy ones.
 create or replace view qa.season_totals_vs_sleeper as
 select
     fs.season,
@@ -68,6 +71,7 @@ left join core.v_sleeper_season_record r
       and r.franchise_code = fs.franchise_code
 where s.platform = 'sleeper'
   and s.status = 'complete'
+  and s.season <> 2023
   and fs.reported_wins is not null
   and (   r.wins   is distinct from fs.reported_wins
        or r.losses is distinct from fs.reported_losses
