@@ -60,6 +60,16 @@ In DBeaver (connected with the **unpooled** host, the one without `-pooler`), ru
 
 Check: `select * from qa.summary;` → 8 rows, all `0`.
 
+## 4. Pull Sleeper history (safe to re-run anytime)
+
+```
+python -m etl.pull_sleeper
+```
+Saves every Sleeper response for every season into `raw.sleeper_response` (a couple of minutes).
+Options: `--season 2026` (one season), `--skip-players`, `--refresh-players`.
+
+Then run `db/checks/002_phase2_field_checks.sql` in DBeaver to see what came in.
+
 ---
 
 ## Folder structure
@@ -80,7 +90,7 @@ app/                 Streamlit app (coming in Phase 4)
 ## Build phases
 
 1. Database + schema ✅
-2. Sleeper history backfill + validation
+2. Sleeper history backfill + validation ← in progress (step 1: raw pull)
 3. NFL stats + player ID mapping
 4. Streamlit first version
 5. Deploy
