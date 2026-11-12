@@ -1,0 +1,17 @@
+# Secrets: never commit these
+.env
+.streamlit/secrets.toml
+
+# Big downloads and local caches (e.g. Sleeper /players/nfl)
+data/cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.DS_Store
+Thumbs.db

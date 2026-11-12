@@ -1,0 +1,9 @@
+# Phase 1-2: database + Sleeper loaders
+psycopg[binary]>=3.2
+python-dotenv>=1.0
+requests>=2.31
+pandas>=2.2
+
+# Added in later phases:
+# nflreadpy   (Phase 3: NFL stats + player ID mapping)
+# streamlit   (Phase 4: dashboard)
