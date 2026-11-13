@@ -48,23 +48,24 @@ python -m etl.db
 ```
 You should see `Connected!`.
 
-## 3. Build the database (run once, safe to re-run)
+## 3. Build the database (safe to re-run)
 
-In DBeaver (connected with the **unpooled** host, the one without `-pooler`), run these with **Execute SQL Script** (`Alt+X`), in order:
+From the VS Code terminal:
+```
+python -m etl.run_sql --all
+```
+That runs every SQL file in order: `db/schema/001` → `006`, then `db/checks/001_validation.sql`, then
+`db/seed/001_reference_data.sql`. Each file shows `ok`. Run it again **after every `git pull`** that changed
+a `.sql` file. It's harmless when nothing changed.
 
-1. `db/schema/001_raw.sql`
-2. `db/schema/002_core.sql`
-3. `db/schema/003_views.sql`
-4. `db/schema/004_player_names.sql`
-5. `db/schema/005_nfl_stats.sql`
-6. `db/schema/006_league_points.sql`
-7. `db/checks/001_validation.sql`
-8. `db/seed/001_reference_data.sql`
+Use this instead of opening the files in DBeaver. DBeaver saves its own copy of a file when it runs it, which
+makes the next `git pull` fail with "your local changes would be overwritten". DBeaver is still the place to
+browse the data and write your own queries (in a new SQL script, not one of the project files).
 
-Check: `select * from qa.summary;` → 21 rows, all `0`.
+Check: `select * from qa.summary;` lists every check with its problem count.
 
-**Rebuilding after a schema change:** run `db/reset_core.sql` first, then the 8 files above, then the loaders again.
-It drops only the `core` and `qa` schemas; everything already pulled into `raw` stays.
+**Rebuilding from scratch:** `python -m etl.run_sql --reset --all` drops only the `core` and `qa` schemas
+(it asks first; everything pulled into `raw` stays), then rebuilds them. Run the loaders again afterwards.
 
 ## 4. Load the raw data (safe to re-run anytime)
 
