@@ -349,7 +349,14 @@ create or replace view qa.league_points_vs_sleeper as
 select pw.season, pw.week, pw.franchise_code, pw.player_id, p.full_name, p.position, x.gsis_id,
        pw.points                               as sleeper_points,
        lp.league_points                        as computed_points,
-       pw.points - lp.league_points            as diff
+       pw.points - lp.league_points            as diff,
+       case when pw.season = 2022 and pw.week = 17 and lp.gsis_id is null and pw.points <> 0
+                 and exists (select 1 from core.nfl_player_week t      -- a Bills or Bengals player that month
+                             where t.gsis_id = x.gsis_id and t.season = 2022
+                               and t.week between 15 and 18 and t.team in ('BUF', 'CIN'))
+            then 'Bills-Bengals game cancelled (Damar Hamlin): Sleeper kept stats from the part that was played; '
+                 'the NFL''s official stats have none'
+       end                                     as note
 from core.player_week pw
 join core.player p          on p.player_id = pw.player_id
 left join core.player_xref x on x.player_id = pw.player_id
@@ -363,13 +370,15 @@ comment on view qa.league_points_vs_sleeper is
 
 
 -- Not a problem list: how often rebuilt points match Sleeper, by season.
-create or replace view qa.league_points_accuracy as
+drop view if exists qa.league_points_accuracy;   -- info view; dropped so its columns can change
+create view qa.league_points_accuracy as
 select season,
        count(*) filter (where computed_points is not null)                          as compared,
        count(*) filter (where abs(diff) < 0.01)                                     as exact,
        count(*) filter (where abs(diff) >= 0.01 and abs(diff) <= 1)                 as within_1,
        count(*) filter (where abs(diff) > 1)                                        as off_by_more,
-       count(*) filter (where computed_points is null)                              as points_but_no_stat_line,
+       count(*) filter (where computed_points is null and note is null)             as points_but_no_stat_line,
+       count(*) filter (where note is not null)                                     as known_exceptions,
        round(100.0 * count(*) filter (where abs(diff) < 0.01)
              / nullif(count(*) filter (where computed_points is not null), 0), 1)   as exact_pct
 from qa.league_points_vs_sleeper
@@ -385,7 +394,7 @@ create or replace view qa.nfl_id_suspect as
 select player_id, full_name, position, gsis_id,
        count(*) filter (where computed_points is not null)                 as weeks_compared,
        count(*) filter (where abs(diff) < 0.01)                            as weeks_exact,
-       count(*) filter (where computed_points is null)                     as weeks_points_but_no_stat_line,
+       count(*) filter (where computed_points is null and note is null)    as weeks_points_but_no_stat_line,
        round(sum(sleeper_points), 1)                                       as sleeper_total,
        round(sum(computed_points), 1)                                      as computed_total
 from qa.league_points_vs_sleeper
@@ -395,7 +404,7 @@ having (count(*) filter (where computed_points is not null) >= 3          -- mos
     or (count(*) filter (where computed_points is not null) between 1 and 2  -- short stint, never matches
         and count(*) filter (where abs(diff) < 0.01) = 0
         and max(abs(diff)) > 1)
-    or count(*) filter (where computed_points is null) >= 2;                 -- scored, but no stat line
+    or count(*) filter (where computed_points is null and note is null) >= 2; -- scored, but no stat line
 
 comment on view qa.nfl_id_suspect is
     'League players whose rebuilt points mostly disagree with Sleeper (likely a wrong NFL id). Fix in data/manual/nfl_id_overrides.csv.';

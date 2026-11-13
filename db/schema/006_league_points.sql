@@ -11,7 +11,13 @@
 -- line can answer. Rules that need play-by-play detail (e.g. points per
 -- 40+ yard catch) aren't covered; qa.scoring_not_covered lists any of those
 -- the league has turned on. Defense (DEF) scoring is not covered yet.
--- Tested 2026-11-13 against 15 real Sleeper weeks (Tyler Conklin, 2021-2024): all exact.
+-- First downs: the NFL (and nflverse) counts a touchdown play as a first down;
+-- Sleeper doesn't pay the first-down bonus on a touchdown. So TD plays are taken
+-- out of the first-down counts below. Found 2026-11-13: exact matches with Sleeper
+-- went from ~69% to 99.1-99.8% for 2023-2026. (pass_fd isn't used by the league;
+-- it's assumed to work the same way.)
+-- Checked 2026-11-13 on the real league: 2021-2022 98.7% of player-weeks exact,
+-- 2023-2026 99.1-99.8% exact.
 --
 -- Run after 005. Safe to re-run.
 -- =====================================================================
@@ -98,7 +104,7 @@ select
         + coalesce(n.passing_tds, 0) * s.pass_td
         + coalesce(n.passing_interceptions, 0) * s.pass_int
         + coalesce(n.passing_2pt_conversions, 0) * s.pass_2pt
-        + coalesce(n.passing_first_downs, 0) * s.pass_fd
+        + (coalesce(n.passing_first_downs, 0) - least(coalesce(n.passing_tds, 0), coalesce(n.passing_first_downs, 0))) * s.pass_fd
         + coalesce(n.attempts, 0) * s.pass_att
         + coalesce(n.completions, 0) * s.pass_cmp
         + (coalesce(n.attempts, 0) - coalesce(n.completions, 0)) * s.pass_inc
@@ -106,13 +112,13 @@ select
         + coalesce(n.rushing_yards, 0) * s.rush_yd
         + coalesce(n.rushing_tds, 0) * s.rush_td
         + coalesce(n.rushing_2pt_conversions, 0) * s.rush_2pt
-        + coalesce(n.rushing_first_downs, 0) * s.rush_fd
+        + (coalesce(n.rushing_first_downs, 0) - least(coalesce(n.rushing_tds, 0), coalesce(n.rushing_first_downs, 0))) * s.rush_fd
         + coalesce(n.carries, 0) * s.rush_att
         + coalesce(n.receptions, 0) * s.rec
         + coalesce(n.receiving_yards, 0) * s.rec_yd
         + coalesce(n.receiving_tds, 0) * s.rec_td
         + coalesce(n.receiving_2pt_conversions, 0) * s.rec_2pt
-        + coalesce(n.receiving_first_downs, 0) * s.rec_fd
+        + (coalesce(n.receiving_first_downs, 0) - least(coalesce(n.receiving_tds, 0), coalesce(n.receiving_first_downs, 0))) * s.rec_fd
         + (case when n.position = 'TE' then coalesce(n.receptions, 0) else 0 end) * s.bonus_rec_te
         + (case when n.position = 'RB' then coalesce(n.receptions, 0) else 0 end) * s.bonus_rec_rb
         + (case when n.position = 'WR' then coalesce(n.receptions, 0) else 0 end) * s.bonus_rec_wr
