@@ -326,6 +326,81 @@ group by s.season, s.week, s.game_id;
 comment on view qa.nfl_stats_without_game is 'Stat lines that don''t link to an NFL game (so no weather).';
 
 
+-- 20. Scoring rules the league uses that can't be rebuilt from a weekly stat line
+--     (needs play-by-play detail, e.g. points per 40+ yard catch). Defense rules are left out.
+--     If this ever lists something, rebuilt points will be off by that rule.
+create or replace view qa.scoring_not_covered as
+select ss.season, ss.stat_key, ss.points
+from core.scoring_setting ss
+where ss.points <> 0
+  and ss.stat_key not in (select stat_key from core.v_scoring_rules_covered)
+  and ss.stat_key !~ '^(def_|idp_|pts_allow|yds_allow)'
+  and ss.stat_key not in ('sack', 'sack_yd', 'int', 'int_ret_yd', 'ff', 'fum_rec', 'fum_ret_yd', 'safe', 'blk_kick',
+                          'blk_kick_ret_yd', 'fg_ret_yd', 'tkl', 'tkl_solo', 'tkl_ast', 'tkl_loss', 'qb_hit',
+                          'st_ff', 'st_fum_rec', 'st_tkl_solo', 'bonus_sack_2p', 'bonus_tkl_10p',
+                          'bonus_def_int_td_50p', 'bonus_def_fum_td_50p');
+
+comment on view qa.scoring_not_covered is 'Offensive/kicking scoring rules in use that rebuilt points can''t answer.';
+
+
+-- Not a problem list: every rostered player-week, Sleeper's points next to the points rebuilt
+-- from the real stat line. computed_points is null when there's no stat line that week.
+create or replace view qa.league_points_vs_sleeper as
+select pw.season, pw.week, pw.franchise_code, pw.player_id, p.full_name, p.position, x.gsis_id,
+       pw.points                               as sleeper_points,
+       lp.league_points                        as computed_points,
+       pw.points - lp.league_points            as diff
+from core.player_week pw
+join core.player p          on p.player_id = pw.player_id
+left join core.player_xref x on x.player_id = pw.player_id
+left join core.v_nfl_league_points lp
+       on lp.gsis_id = x.gsis_id and lp.season = pw.season and lp.week = pw.week and lp.season_type = 'REG'
+where p.position is distinct from 'DEF'
+  and (lp.gsis_id is not null or pw.points <> 0);
+
+comment on view qa.league_points_vs_sleeper is
+    'Info: Sleeper points vs points rebuilt from the real stat line, per rostered player-week (defenses aside).';
+
+
+-- Not a problem list: how often rebuilt points match Sleeper, by season.
+create or replace view qa.league_points_accuracy as
+select season,
+       count(*) filter (where computed_points is not null)                          as compared,
+       count(*) filter (where abs(diff) < 0.01)                                     as exact,
+       count(*) filter (where abs(diff) >= 0.01 and abs(diff) <= 1)                 as within_1,
+       count(*) filter (where abs(diff) > 1)                                        as off_by_more,
+       count(*) filter (where computed_points is null)                              as points_but_no_stat_line,
+       round(100.0 * count(*) filter (where abs(diff) < 0.01)
+             / nullif(count(*) filter (where computed_points is not null), 0), 1)   as exact_pct
+from qa.league_points_vs_sleeper
+group by season
+order by season;
+
+comment on view qa.league_points_accuracy is 'Info: share of player-weeks where rebuilt points equal Sleeper''s, by season.';
+
+
+-- 21. League players whose NFL id is probably wrong: most of their weeks don't match Sleeper,
+--     or Sleeper gave them points in weeks their NFL id has no stat line.
+create or replace view qa.nfl_id_suspect as
+select player_id, full_name, position, gsis_id,
+       count(*) filter (where computed_points is not null)                 as weeks_compared,
+       count(*) filter (where abs(diff) < 0.01)                            as weeks_exact,
+       count(*) filter (where computed_points is null)                     as weeks_points_but_no_stat_line,
+       round(sum(sleeper_points), 1)                                       as sleeper_total,
+       round(sum(computed_points), 1)                                      as computed_total
+from qa.league_points_vs_sleeper
+group by player_id, full_name, position, gsis_id
+having (count(*) filter (where computed_points is not null) >= 3          -- most weeks disagree
+        and count(*) filter (where abs(diff) < 0.01) * 2 < count(*) filter (where computed_points is not null))
+    or (count(*) filter (where computed_points is not null) between 1 and 2  -- short stint, never matches
+        and count(*) filter (where abs(diff) < 0.01) = 0
+        and max(abs(diff)) > 1)
+    or count(*) filter (where computed_points is null) >= 2;                 -- scored, but no stat line
+
+comment on view qa.nfl_id_suspect is
+    'League players whose rebuilt points mostly disagree with Sleeper (likely a wrong NFL id). Fix in data/manual/nfl_id_overrides.csv.';
+
+
 -- Not a problem list: NFL id links that needed a decision (conflicts, duplicates, name matches).
 create or replace view qa.nfl_id_notes as
 select x.player_id, p.full_name, p.position, x.gsis_id, x.method, x.note
@@ -399,6 +474,8 @@ union all select 'unmatched_names',                     count(*) from qa.unmatch
 union all select 'keepers_not_loaded',                  count(*) from qa.keepers_not_loaded
 union all select 'league_players_without_nfl_id',       count(*) from qa.league_players_without_nfl_id
 union all select 'nfl_id_shared',                       count(*) from qa.nfl_id_shared
-union all select 'nfl_stats_without_game',              count(*) from qa.nfl_stats_without_game;
+union all select 'nfl_stats_without_game',              count(*) from qa.nfl_stats_without_game
+union all select 'scoring_not_covered',                 count(*) from qa.scoring_not_covered
+union all select 'nfl_id_suspect',                      count(*) from qa.nfl_id_suspect;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';

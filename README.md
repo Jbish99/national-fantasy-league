@@ -57,12 +57,13 @@ In DBeaver (connected with the **unpooled** host, the one without `-pooler`), ru
 3. `db/schema/003_views.sql`
 4. `db/schema/004_player_names.sql`
 5. `db/schema/005_nfl_stats.sql`
-6. `db/checks/001_validation.sql`
-7. `db/seed/001_reference_data.sql`
+6. `db/schema/006_league_points.sql`
+7. `db/checks/001_validation.sql`
+8. `db/seed/001_reference_data.sql`
 
-Check: `select * from qa.summary;` → 19 rows, all `0`.
+Check: `select * from qa.summary;` → 21 rows, all `0`.
 
-**Rebuilding after a schema change:** run `db/reset_core.sql` first, then the 7 files above, then the loaders again.
+**Rebuilding after a schema change:** run `db/reset_core.sql` first, then the 8 files above, then the loaders again.
 It drops only the `core` and `qa` schemas; everything already pulled into `raw` stays.
 
 ## 4. Load the raw data (safe to re-run anytime)
@@ -141,7 +142,13 @@ Each run re-downloads only what can still change (the ID crosswalk, the schedule
 Options: `--refresh` (re-download everything), `--no-download` (rebuild from the saved files),
 `--step xref|games|stats`.
 
-If `qa.league_players_without_nfl_id` lists someone, add a row to `data/manual/nfl_id_overrides.csv`
+**Checking the NFL ids with points.** `core.v_nfl_league_points` scores every stat line with that season's
+league rules (from Sleeper's scoring settings). When a player's NFL id is right, it matches Sleeper's points:
+- `select * from qa.league_points_accuracy;` how often rebuilt points equal Sleeper's, by season
+- `select * from qa.nfl_id_suspect;` players whose points mostly don't match (probably a wrong id)
+- `select * from qa.league_points_vs_sleeper where abs(diff) > 1;` the individual weeks that differ
+
+If `qa.league_players_without_nfl_id` or `qa.nfl_id_suspect` lists someone, add a row to `data/manual/nfl_id_overrides.csv`
 (`player_id` = Sleeper id, `gsis_id` = NFL id, `note`), then run `python -m etl.load_nflverse --no-download`.
 `python -m etl.check_nflverse` prints what nflverse's files contain, if a column ever goes missing.
 
@@ -177,7 +184,7 @@ app/                 Streamlit app (coming in Phase 4)
 
 1. Database + schema ✅
 2. History backfill + validation ✅ (once the player-name review is done)
-3. NFL stats + player ID mapping ← in progress (stat lines, games, ids loaded; league-points check next)
+3. NFL stats + player ID mapping ← in progress (stat lines, games, ids, league-points check; defenses next)
 4. Streamlit first version
 5. Deploy
 6. Weekly in-season refresh
