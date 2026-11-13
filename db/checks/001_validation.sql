@@ -54,6 +54,9 @@ comment on view qa.matchup_pairs is 'A Sleeper matchup_id that does not have exa
 --    2023 is skipped on purpose: Sleeper's 2023 /rosters season totals don't match
 --    its own weekly scores (found 2026-11-12). The weekly scores match the workbook
 --    for 192 of 196 team-weeks, so the weekly numbers are the trustworthy ones.
+--    W/L/T must match exactly. Points may differ by up to 3: Sleeper's season totals
+--    don't always pick up late stat corrections (2021 and 2024 have 0.01-2.00 gaps where
+--    the weekly score and the workbook agree). A real load problem is off by far more.
 create or replace view qa.season_totals_vs_sleeper as
 select
     fs.season,
@@ -76,10 +79,11 @@ where s.platform = 'sleeper'
   and (   r.wins   is distinct from fs.reported_wins
        or r.losses is distinct from fs.reported_losses
        or r.ties   is distinct from fs.reported_ties
-       or abs(coalesce(r.points_for, 0)     - coalesce(fs.reported_points_for, 0))     >= 0.01
-       or abs(coalesce(r.points_against, 0) - coalesce(fs.reported_points_against, 0)) >= 0.01);
+       or abs(coalesce(r.points_for, 0)     - coalesce(fs.reported_points_for, 0))     > 3
+       or abs(coalesce(r.points_against, 0) - coalesce(fs.reported_points_against, 0)) > 3);
 
-comment on view qa.season_totals_vs_sleeper is 'Sleeper weekly scores don''t add up to Sleeper''s own season totals.';
+comment on view qa.season_totals_vs_sleeper is
+    'Sleeper weekly scores don''t match Sleeper''s own season totals (exact W/L/T; points within 3). 2023 skipped.';
 
 
 -- 4. Each loaded Sleeper week has a row for every team.
