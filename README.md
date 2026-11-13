@@ -124,6 +124,15 @@ Compares the Scores Dashboard (head-to-head, season totals, record lists, Game o
 IST, division and conference records) with the database. Differences caused by the score policy below are
 **explained** (add `--details` to list them); anything **unexplained** is printed and worth a look.
 
+## 8. NFL stats (Phase 3, in progress)
+
+```
+python -m etl.check_nflverse
+```
+Downloads nflverse's ID crosswalk, weekly stat lines and schedules (free, no key) and prints what's in them,
+plus how many of the league's players can be mapped. Nothing is saved yet; it's the field check before the
+Phase 3 tables are designed.
+
 ## Where the official history comes from
 
 - **`core.game`** is the official record of every game (2020 →). It's built from the All-In-One workbook.

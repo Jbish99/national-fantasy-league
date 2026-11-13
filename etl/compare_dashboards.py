@@ -352,7 +352,7 @@ def main():
         print(f"[{status:5}] {t.name}: {t.matched} of {t.checked} match{extra}"
               + (f", {len(t.unexplained)} UNEXPLAINED" if t.unexplained else ""))
         for what, values, reasons in t.unexplained:
-            print(f"          ✗ {what}: {values}")
+            print(f"          X {what}: {values}")
             for reason in reasons:
                 print(f"              {reason}")
         if args.details:
