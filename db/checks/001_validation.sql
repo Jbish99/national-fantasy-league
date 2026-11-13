@@ -284,6 +284,74 @@ where coalesce(l.loaded_keepers, 0) <> w.workbook_keepers;
 comment on view qa.keepers_not_loaded is 'Seasons where fewer keepers loaded than the workbook lists (usually an unmatched name).';
 
 
+-- ---------------------------------------------------------------------
+-- E. NFL stats (Phase 3)
+-- ---------------------------------------------------------------------
+
+-- 17. Players who've been on a league roster but have no NFL id, so no real stat line.
+--     Defenses are left out (their stat lines are team totals, not players).
+--     Fix: add a row to data/manual/nfl_id_overrides.csv, then re-run load_nflverse.
+create or replace view qa.league_players_without_nfl_id as
+select p.player_id, p.full_name, p.position, min(pw.season) as first_season, max(pw.season) as last_season,
+       sum(pw.points) as league_points
+from core.player p
+join core.player_week pw on pw.player_id = p.player_id
+where p.position is distinct from 'DEF'
+  and not exists (select 1 from core.player_xref x where x.player_id = p.player_id)
+group by p.player_id, p.full_name, p.position;
+
+comment on view qa.league_players_without_nfl_id is 'League-rostered players with no NFL (gsis) id, so no real stat line.';
+
+
+-- 18. Two Sleeper ids pointing at the same NFL player (one of them is probably wrong).
+create or replace view qa.nfl_id_shared as
+select x.gsis_id, string_agg(x.player_id || ' ' || coalesce(p.full_name, '?') || ' (' || x.method || ')', '; ') as sleeper_players
+from core.player_xref x
+join core.player p on p.player_id = x.player_id
+group by x.gsis_id
+having count(*) > 1
+   and count(*) filter (where exists (select 1 from core.player_week pw where pw.player_id = x.player_id)) > 0;
+
+comment on view qa.nfl_id_shared is 'An NFL id linked to more than one Sleeper player, at least one of them rostered in the league.';
+
+
+-- 19. Stat lines whose game isn't in core.nfl_game.
+create or replace view qa.nfl_stats_without_game as
+select s.season, s.week, s.game_id, count(*) as stat_rows
+from core.nfl_player_week s
+where s.game_id is null
+   or not exists (select 1 from core.nfl_game g where g.game_id = s.game_id)
+group by s.season, s.week, s.game_id;
+
+comment on view qa.nfl_stats_without_game is 'Stat lines that don''t link to an NFL game (so no weather).';
+
+
+-- Not a problem list: NFL id links that needed a decision (conflicts, duplicates, name matches).
+create or replace view qa.nfl_id_notes as
+select x.player_id, p.full_name, p.position, x.gsis_id, x.method, x.note
+from core.player_xref x
+join core.player p on p.player_id = x.player_id
+where x.note is not null
+  and exists (select 1 from core.player_week pw where pw.player_id = x.player_id)
+order by x.method, p.full_name;
+
+comment on view qa.nfl_id_notes is 'Info: league players whose NFL id link needed a decision. Worth a glance.';
+
+
+-- Not a problem list: how much weather the source has, per season.
+create or replace view qa.weather_coverage as
+select season,
+       count(*) filter (where home_score is not null)                                      as played_games,
+       count(*) filter (where home_score is not null and roof in ('outdoors', 'open'))     as outdoor_played,
+       count(*) filter (where home_score is not null and roof in ('outdoors', 'open') and temp is null) as outdoor_missing_temp,
+       count(*) filter (where home_score is not null and roof in ('outdoors', 'open') and wind is null) as outdoor_missing_wind
+from core.nfl_game
+group by season
+order by season;
+
+comment on view qa.weather_coverage is 'Info: played outdoor/open-roof games missing temperature or wind in the source, by season.';
+
+
 -- Not a problem list: close-spelling matches worth a quick look (status = check).
 create or replace view qa.name_matches_to_check as
 select source, season, team_code, name_as_entered, position, matched_name, player_id, score, candidates
@@ -328,6 +396,9 @@ union all select 'orphan_game_overrides',               count(*) from qa.orphan_
 union all select 'pairing_vs_sleeper',                  count(*) from qa.pairing_vs_sleeper
 union all select 'unexplained_winner_differences',      count(*) from qa.unexplained_winner_differences
 union all select 'unmatched_names',                     count(*) from qa.unmatched_names
-union all select 'keepers_not_loaded',                  count(*) from qa.keepers_not_loaded;
+union all select 'keepers_not_loaded',                  count(*) from qa.keepers_not_loaded
+union all select 'league_players_without_nfl_id',       count(*) from qa.league_players_without_nfl_id
+union all select 'nfl_id_shared',                       count(*) from qa.nfl_id_shared
+union all select 'nfl_stats_without_game',              count(*) from qa.nfl_stats_without_game;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';

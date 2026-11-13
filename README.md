@@ -56,12 +56,13 @@ In DBeaver (connected with the **unpooled** host, the one without `-pooler`), ru
 2. `db/schema/002_core.sql`
 3. `db/schema/003_views.sql`
 4. `db/schema/004_player_names.sql`
-5. `db/checks/001_validation.sql`
-6. `db/seed/001_reference_data.sql`
+5. `db/schema/005_nfl_stats.sql`
+6. `db/checks/001_validation.sql`
+7. `db/seed/001_reference_data.sql`
 
-Check: `select * from qa.summary;` → 16 rows, all `0`.
+Check: `select * from qa.summary;` → 19 rows, all `0`.
 
-**Rebuilding after a schema change:** run `db/reset_core.sql` first, then the 6 files above, then the loaders again.
+**Rebuilding after a schema change:** run `db/reset_core.sql` first, then the 7 files above, then the loaders again.
 It drops only the `core` and `qa` schemas; everything already pulled into `raw` stays.
 
 ## 4. Load the raw data (safe to re-run anytime)
@@ -124,14 +125,25 @@ Compares the Scores Dashboard (head-to-head, season totals, record lists, Game o
 IST, division and conference records) with the database. Differences caused by the score policy below are
 **explained** (add `--details` to list them); anything **unexplained** is printed and worth a look.
 
-## 8. NFL stats (Phase 3, in progress)
+## 8. NFL stat lines, games and weather (Phase 3)
 
 ```
-python -m etl.check_nflverse
+python -m etl.load_nflverse
 ```
-Downloads nflverse's ID crosswalk, weekly stat lines and schedules (free, no key) and prints what's in them,
-plus how many of the league's players can be mapped. Nothing is saved yet; it's the field check before the
-Phase 3 tables are designed.
+Downloads from nflverse (free, no key) and fills:
+- `core.player_xref`: each Sleeper player's NFL (gsis) id
+- `core.nfl_game`: every NFL game since 2020 with scores, roof, surface, temperature and wind
+- `core.nfl_player_week`: weekly stat lines for every QB, RB, WR, TE, K and FB
+- `core.v_player_week_full`: every rostered Sleeper player-week next to the real stat line and game conditions
+
+The downloaded files are saved in `data/cache/nflverse/` (git-ignored) and logged in `raw.nflverse_pull`.
+Each run re-downloads only what can still change (the ID crosswalk, the schedule, this season's stats).
+Options: `--refresh` (re-download everything), `--no-download` (rebuild from the saved files),
+`--step xref|games|stats`.
+
+If `qa.league_players_without_nfl_id` lists someone, add a row to `data/manual/nfl_id_overrides.csv`
+(`player_id` = Sleeper id, `gsis_id` = NFL id, `note`), then run `python -m etl.load_nflverse --no-download`.
+`python -m etl.check_nflverse` prints what nflverse's files contain, if a column ever goes missing.
 
 ## Where the official history comes from
 
@@ -165,7 +177,7 @@ app/                 Streamlit app (coming in Phase 4)
 
 1. Database + schema ✅
 2. History backfill + validation ✅ (once the player-name review is done)
-3. NFL stats + player ID mapping ← next
+3. NFL stats + player ID mapping ← in progress (stat lines, games, ids loaded; league-points check next)
 4. Streamlit first version
 5. Deploy
 6. Weekly in-season refresh
