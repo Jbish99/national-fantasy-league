@@ -55,12 +55,13 @@ In DBeaver (connected with the **unpooled** host, the one without `-pooler`), ru
 1. `db/schema/001_raw.sql`
 2. `db/schema/002_core.sql`
 3. `db/schema/003_views.sql`
-4. `db/checks/001_validation.sql`
-5. `db/seed/001_reference_data.sql`
+4. `db/schema/004_player_names.sql`
+5. `db/checks/001_validation.sql`
+6. `db/seed/001_reference_data.sql`
 
-Check: `select * from qa.summary;` → 14 rows, all `0`.
+Check: `select * from qa.summary;` → 16 rows, all `0`.
 
-**Rebuilding after a schema change:** run `db/reset_core.sql` first, then the 5 files above, then the loaders again.
+**Rebuilding after a schema change:** run `db/reset_core.sql` first, then the 6 files above, then the loaders again.
 It drops only the `core` and `qa` schemas; everything already pulled into `raw` stays.
 
 ## 4. Load the raw data (safe to re-run anytime)
@@ -82,23 +83,55 @@ Then run `db/checks/002_phase2_field_checks.sql` in DBeaver to see what came in 
 python -m etl.load_core
 ```
 Fills every `core` table from the raw data, step by step (seasons, owners, players, weeks, games, playoffs,
-drafts, transactions, rankings, awards), then prints any `qa` checks that found something.
-Run one step on its own with `--step games` (repeatable), but run them all the first time.
+drafts, transactions, rankings, awards, names, keepers, draft_2020, award_players), then prints any `qa`
+checks that found something. Run one step with `--step games` (repeatable), or a step and everything after
+it with `--from names`. Run them all the first time.
 
 Then in DBeaver: `select * from qa.summary;`
 - `custom_points_used` = 2 is expected: Sleeper's commissioner override on the 2022 Fantasy Bowl.
 - `stub_players` = a few is fine: player ids Sleeper's player list doesn't have anymore.
+- `unmatched_names` / `keepers_not_loaded`: workbook player names that need a player id (next section).
 - Anything else non-zero: look at `select * from qa.<check_name>;`
 
 Typical update after new games or a new workbook version: `pull_sleeper` → `load_workbook` → `load_core`.
+
+## 6. Review the workbook's player names (keepers, 2020 draft, awards)
+
+The workbook types player names by hand ("Saquon Barkely", "Gay", "Colts"), so the `names` step matches each
+one to a Sleeper player id and writes the results to **`data/manual/player_name_map.csv`**. Open it in Excel.
+Rows are sorted so the ones that need you are on top:
+
+| status | meaning | what to do |
+|---|---|---|
+| `unmatched` | no good match, **not used** | type the right `player_id` (the `candidates` column usually has it) |
+| `check` | close spelling or small doubt, **used** | glance at `matched_name`; fix `player_id` if it's wrong |
+| `auto` | exact match, used | nothing |
+| `confirmed` | you decided; kept on every re-run | nothing |
+| `not_a_player` | e.g. a coach in Bozo of the Year | set this status yourself; never used |
+
+- Typing a `player_id` is enough; it becomes `confirmed` on the next run. To look up an id in DBeaver:
+  `select player_id, full_name, position, nfl_team from core.player where full_name ilike '%barkley%';`
+- Use the `your_notes` column for anything you want to remember; it's always kept.
+- Save as CSV (either CSV type works), close Excel, then run `python -m etl.load_core --from names`.
+- Commit the CSV when you're happy with it, so your decisions are saved in GitHub.
+
+## 7. Check the history against the workbook's dashboards
+
+```
+python -m etl.compare_dashboards
+```
+Compares the Scores Dashboard (head-to-head, season totals, record lists, Game of the Week, International,
+IST, division and conference records) with the database. Differences caused by the score policy below are
+**explained** (add `--details` to list them); anything **unexplained** is printed and worth a look.
 
 ## Where the official history comes from
 
 - **`core.game`** is the official record of every game (2020 →). It's built from the All-In-One workbook.
   For seasons marked `sleeper` in `core.season.official_scores_from`, scores come from Sleeper (they include
   stat corrections) unless the workbook names a different winner. 2020 and 2023 use the workbook's scores.
-- **`core.game_override`** (in the seed file) holds hand-decided results: the 2022 co-champions and the 2020
-  consolation games where only the winner is known.
+- **`core.game_override`** (in the seed file) holds hand-decided results: the 2022 co-champions (a tie in
+  head-to-head records) and the 2020 consolation games where only the winner is known (no score is stored;
+  the workbook's 110-100 style numbers for those games are placeholders).
 - **`core.team_week` / `core.player_week`** are exactly what Sleeper reports, for lineup and player analysis.
 
 ---
@@ -122,8 +155,8 @@ app/                 Streamlit app (coming in Phase 4)
 ## Build phases
 
 1. Database + schema ✅
-2. History backfill + validation ← in progress (core loader done; keepers + 2020 draft + player-name matching next)
-3. NFL stats + player ID mapping
+2. History backfill + validation ✅ (once the player-name review is done)
+3. NFL stats + player ID mapping ← next
 4. Streamlit first version
 5. Deploy
 6. Weekly in-season refresh

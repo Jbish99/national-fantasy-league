@@ -249,6 +249,51 @@ where s.official_scores_from = 'sleeper'
 comment on view qa.unexplained_winner_differences is 'Workbook and Sleeper disagree on the winner, in a Sleeper-scored season, with no override. Decide which is right.';
 
 
+-- ---------------------------------------------------------------------
+-- D. Workbook player names (keepers, 2020 draft, awards)
+-- ---------------------------------------------------------------------
+
+-- 15. Workbook names with no Sleeper player yet. Fix in data/manual/player_name_map.csv
+--     (fill player_id + status confirmed, or status not_a_player), then re-run load_core.
+create or replace view qa.unmatched_names as
+select source, season, team_code, name_as_entered, position, candidates
+from core.player_name_map
+where status = 'unmatched';
+
+comment on view qa.unmatched_names is 'Workbook player names that still need a Sleeper player id.';
+
+
+-- 16. Every keeper in the workbook made it into core.keeper.
+create or replace view qa.keepers_not_loaded as
+with workbook as (
+    select (data ->> 'Year')::smallint as season, count(*) as workbook_keepers
+    from raw.workbook_row
+    where sheet = 'Keepers'
+    group by 1
+),
+loaded as (
+    select season, count(*) as loaded_keepers
+    from core.keeper
+    group by season
+)
+select w.season, w.workbook_keepers, coalesce(l.loaded_keepers, 0) as loaded_keepers
+from workbook w
+left join loaded l on l.season = w.season
+where coalesce(l.loaded_keepers, 0) <> w.workbook_keepers;
+
+comment on view qa.keepers_not_loaded is 'Seasons where fewer keepers loaded than the workbook lists (usually an unmatched name).';
+
+
+-- Not a problem list: close-spelling matches worth a quick look (status = check).
+create or replace view qa.name_matches_to_check as
+select source, season, team_code, name_as_entered, position, matched_name, player_id, score, candidates
+from core.player_name_map
+where status = 'check'
+order by score, season;
+
+comment on view qa.name_matches_to_check is 'Info: probable name matches (close spellings). Confirm or fix them in the CSV.';
+
+
 -- Not a problem list: every game where the official score differs from Sleeper's.
 -- Expected rows: all of 2023 (workbook is official) plus small stat-correction gaps.
 create or replace view qa.official_vs_sleeper_scores as
@@ -281,6 +326,8 @@ union all select 'regular_season_game_count',           count(*) from qa.regular
 union all select 'fantasy_bowl_count',                  count(*) from qa.fantasy_bowl_count
 union all select 'orphan_game_overrides',               count(*) from qa.orphan_game_overrides
 union all select 'pairing_vs_sleeper',                  count(*) from qa.pairing_vs_sleeper
-union all select 'unexplained_winner_differences',      count(*) from qa.unexplained_winner_differences;
+union all select 'unexplained_winner_differences',      count(*) from qa.unexplained_winner_differences
+union all select 'unmatched_names',                     count(*) from qa.unmatched_names
+union all select 'keepers_not_loaded',                  count(*) from qa.keepers_not_loaded;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';

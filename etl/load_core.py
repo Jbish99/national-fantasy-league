@@ -19,15 +19,18 @@ Steps, in order (each one is its own transaction, so a failure leaves earlier st
   transactions  trades, waivers, adds/drops, traded picks, traded FAAB   (Sleeper)
   rankings      weekly top-4 power rankings                              (workbook)
   awards        individual and team awards                               (workbook)
+  names         match workbook player names to Sleeper ids; writes
+                data/manual/player_name_map.csv for review              (workbook + Sleeper)
+  keepers       core.keeper from the Keepers sheet                       (workbook)
+  draft_2020    the 2020 ESPN draft from the Draft sheet                 (workbook)
+  award_players link individual awards to player ids                     (workbook)
 
-Not yet: keepers, the 2020 draft and linking award names to player ids
-(they need player-name matching; that's the next step).
-
-Safe to re-run: every step replaces what it owns.
+Safe to re-run: every step replaces what it owns. Names you confirmed in the CSV are kept.
 
 Run from the project root:
     python -m etl.load_core                    # everything
     python -m etl.load_core --step games       # just one step (repeatable)
+    python -m etl.load_core --from names       # after editing player_name_map.csv
 Then check:  select * from qa.summary;
 """
 
@@ -35,121 +38,17 @@ import argparse
 import re
 import sys
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date
 
 import psycopg
 from psycopg.types.json import Jsonb
 
+from etl import match_players
+from etl.common import (
+    LoadProblem, clean_name, franchise_code_for, from_millis, is_empty_slot,
+    latest, roster_map, season_points, to_bool, to_number, winner_of, workbook_rows,
+)
 from etl.db import get_connection
-
-WORKBOOK = "All-In-One.xlsx"
-
-
-class LoadProblem(Exception):
-    """Raised with a list of plain-English problems; the step is rolled back."""
-
-    def __init__(self, step, problems):
-        self.step = step
-        self.problems = problems
-        super().__init__(f"{step}: {len(problems)} problem(s)")
-
-
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
-
-def latest(conn, endpoint):
-    """Newest copy of every Sleeper response for an endpoint: [(season, week, payload)]."""
-    return conn.execute(
-        "select season, week, payload from raw.v_sleeper_latest "
-        "where endpoint = %s order by season, week nulls first",
-        (endpoint,),
-    ).fetchall()
-
-
-def workbook_rows(conn, sheet):
-    rows = conn.execute(
-        "select row_number, data from raw.workbook_row "
-        "where workbook = %s and sheet = %s order by row_number",
-        (WORKBOOK, sheet),
-    ).fetchall()
-    if not rows:
-        raise LoadProblem(sheet, [f"No '{sheet}' rows in raw.workbook_row. Run: python -m etl.load_workbook"])
-    return rows
-
-
-def roster_map(conn):
-    """(season, sleeper_roster_id) -> franchise_code"""
-    return {
-        (season, rid): code
-        for season, rid, code in conn.execute(
-            "select season, sleeper_roster_id, franchise_code from core.franchise_season "
-            "where sleeper_roster_id is not null"
-        )
-    }
-
-
-def season_points(settings, key):
-    """Sleeper stores season points as a whole part plus hundredths, e.g. fpts + fpts_decimal."""
-    whole = settings.get(key)
-    if whole is None:
-        return None
-    return round(whole + (settings.get(f"{key}_decimal") or 0) / 100, 2)
-
-
-def from_millis(ms):
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc) if ms else None
-
-
-def to_number(value):
-    if value is None or value == "":
-        return None
-    return round(float(value), 2)
-
-
-def to_bool(value):
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in ("true", "yes", "y", "1")
-
-
-def winner_of(code1, code2, pts1, pts2):
-    if pts1 is None or pts2 is None or pts1 == pts2:
-        return None
-    return code1 if pts1 > pts2 else code2
-
-
-def is_empty_slot(player_id):
-    return player_id in (None, "", "0")
-
-
-# ---------------------------------------------------------------------------
-# Team names in the workbook -> franchise codes
-# ---------------------------------------------------------------------------
-
-LOCATIONS = {  # longest names are tried first, so "Oak Park" never matches "Oakland"
-    "vehicle city": "VHC", "grand rapids": "GRR", "grand blanc": "GRB", "great lakes": "GRL",
-    "sand point": "SDP", "stonebrook": "STO", "mississippi": "MIS", "farmington": "FAR",
-    "oak park": "OAP", "oakland": "OAK", "detroit": "DET", "montana": "MON", "flint": "FLT",
-}
-
-
-def franchise_code_for(name, season):
-    """Turn any spelling the workbook uses into a franchise code, or None if unknown."""
-    if not name:
-        return None
-    text = re.sub(r"\s+", " ", str(name)).strip().lower()
-    if text.startswith("up north"):
-        rest = text[len("up north"):].strip(" ()")
-        if rest.startswith("b"):          # "Up North B", "Up North (Blizz)", "Up North Blizzard"
-            return "UPB"
-        if rest.startswith("n"):          # "Up North N", "Up North Nightmare"
-            return "UPN"
-        return "UPB" if season <= 2020 else "UPN"
-    for location in sorted(LOCATIONS, key=len, reverse=True):
-        if text.startswith(location):
-            return LOCATIONS[location]
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -285,8 +184,9 @@ def load_players(conn):
     if not players:
         print("    note: no /players/nfl in raw yet; only placeholder rows will be made")
 
-    def as_text(value):
-        return None if value in (None, "") else str(value)
+    def as_text(value):  # ids come as numbers or text, sometimes with stray spaces (" 00-0035659")
+        text = None if value is None else str(value).strip()
+        return text or None
 
     def birth(value):
         try:
@@ -746,6 +646,133 @@ def load_awards(conn):
     print(f"    {saved} awards" + (f" ({skipped} exact duplicate row(s) in the workbook skipped)" if skipped else ""))
 
 
+# ---------------------------------------------------------------------------
+# Workbook player names -> Sleeper ids (keepers, 2020 draft, award winners)
+# ---------------------------------------------------------------------------
+
+def load_names(conn):
+    match_players.run(conn)
+
+
+def name_map(conn, source):
+    """(season, team_code, name_as_entered) -> player_id, for matches we trust enough to use."""
+    return {
+        (season, team, name): pid
+        for season, team, name, pid in conn.execute(
+            "select season, team_code, name_as_entered, player_id from core.player_name_map "
+            "where source = %s and player_id is not null and status in ('auto', 'check', 'confirmed')",
+            (source,),
+        )
+    }
+
+
+def load_keepers(conn):
+    ids = name_map(conn, "keeper")
+    rows, waiting, problems = [], [], []
+    for row_number, d in workbook_rows(conn, "Keepers"):
+        season, name = int(d["Year"]), clean_name(d.get("Name"))
+        code = franchise_code_for(d.get("Team"), season)
+        if not code:
+            problems.append(f"Keepers row {row_number}: don't recognize team '{d.get('Team')}'")
+            continue
+        if not name:
+            continue
+        pid = ids.get((season, code, name))
+        if pid:
+            rows.append((season, code, pid, name))
+        else:
+            waiting.append(f"{season} {code} {name}")
+    if problems:
+        raise LoadProblem("keepers", problems)
+
+    conn.execute("delete from core.keeper")
+    with conn.cursor() as cur:
+        cur.executemany(
+            "insert into core.keeper (season, franchise_code, player_id, name_as_entered) "
+            "values (%s, %s, %s, %s) on conflict do nothing",
+            rows,
+        )
+    saved = conn.execute("select count(*) from core.keeper").fetchone()[0]
+    print(f"    {saved} keepers")
+    if waiting:
+        print(f"    {len(waiting)} keeper(s) waiting on a player id (see qa.unmatched_names): " + ", ".join(waiting[:5])
+              + (" ..." if len(waiting) > 5 else ""))
+    if saved < len(rows):
+        print(f"    note: {len(rows) - saved} keeper row(s) point at a player already kept by that team that year")
+
+
+def load_sheet_drafts(conn):
+    """Drafts from seasons Sleeper doesn't have (2020, ESPN), from the workbook's Draft sheet.
+    The sheet has the round and team for each pick but not the pick number, so pick_no is the
+    sheet's row order (flagged pick_no_is_estimated). 43 picks have no team ('?')."""
+    seasons = [s for (s,) in conn.execute("select season from core.season where platform <> 'sleeper' order by 1")]
+    ids = name_map(conn, "draft")
+    by_season = defaultdict(list)
+    for row_number, d in workbook_rows(conn, "Draft"):
+        if int(d["Year"]) in seasons:
+            by_season[int(d["Year"])].append((row_number, d))
+
+    problems, summary = [], []
+    for season in seasons:
+        picks = []
+        for pick_no, (row_number, d) in enumerate(by_season.get(season, []), start=1):
+            team = str(d.get("Drafting Team") or "").strip()
+            code = None if team in ("", "?") else franchise_code_for(team, season)
+            if team not in ("", "?") and not code:
+                problems.append(f"Draft row {row_number}: don't recognize team '{team}'")
+                continue
+            name = clean_name(d.get("Player Name"))
+            recorded = d.get("Overall Pick")
+            picks.append((
+                f"workbook-{season}", pick_no, season, int(d["Round"]), d.get("Pick"), code,
+                ids.get((season, code, name)), to_bool(d.get("Keeper")), name,
+                recorded is None or int(recorded) != pick_no,
+            ))
+        if problems or not picks:
+            continue
+        draft_id = f"workbook-{season}"
+        conn.execute(
+            """
+            insert into core.draft (draft_id, season, draft_type, rounds, status, source)
+            values (%s, %s, null, %s, 'complete', 'sheet')
+            on conflict (draft_id) do update set rounds = excluded.rounds, source = 'sheet'
+            """,
+            (draft_id, season, max(p[3] for p in picks)),
+        )
+        conn.execute("delete from core.draft_pick where draft_id = %s", (draft_id,))
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                insert into core.draft_pick (draft_id, pick_no, season, round, draft_slot, franchise_code,
+                                             player_id, is_keeper, player_name_as_entered, pick_no_is_estimated)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                picks,
+            )
+        no_team = sum(1 for p in picks if p[5] is None)
+        no_id = sum(1 for p in picks if p[6] is None)
+        summary.append(f"{season}: {len(picks)} picks ({no_team} with no team, {no_id} with no player id yet)")
+    if problems:
+        raise LoadProblem("draft_2020", problems)
+    for line in summary or ["no workbook-only drafts to load"]:
+        print(f"    {line}")
+
+
+def load_award_players(conn):
+    ids = name_map(conn, "award")
+    awards = conn.execute(
+        "select award_id, season, franchise_code, player_name_as_entered from core.award "
+        "where player_name_as_entered is not null").fetchall()
+    updates = []
+    for award_id, season, code, name in awards:
+        updates.append((ids.get((season, code, clean_name(name))), award_id))
+    with conn.cursor() as cur:
+        cur.executemany("update core.award set player_id = %s where award_id = %s", updates)
+    linked = sum(1 for pid, _ in updates if pid)
+    print(f"    {linked} of {len(updates)} individual awards linked to a player"
+          " (the rest: Most Valuable Owner rows, coaches, or names still unmatched)")
+
+
 STEPS = [
     ("seasons", load_seasons),
     ("owners", load_owners),
@@ -757,18 +784,35 @@ STEPS = [
     ("transactions", load_transactions),
     ("rankings", load_rankings),
     ("awards", load_awards),
+    ("names", load_names),
+    ("keepers", load_keepers),
+    ("draft_2020", load_sheet_drafts),
+    ("award_players", load_award_players),
 ]
+STEP_NAMES = [name for name, _ in STEPS]
+
+
+SCHEMA_TIP = (
+    "Your database is missing a table or column this code needs, usually because a newer schema file\n"
+    "hasn't been run yet. In DBeaver run, in this order: db/schema/004_player_names.sql, then\n"
+    "db/checks/001_validation.sql. Then run this command again."
+)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the core tables from the raw layer.")
-    parser.add_argument("--step", action="append", choices=[name for name, _ in STEPS],
+    parser.add_argument("--step", action="append", choices=STEP_NAMES,
                         help="run only this step (repeatable). Default: all, in order")
+    parser.add_argument("--from", dest="start", choices=STEP_NAMES,
+                        help="run this step and every step after it (e.g. --from names)")
     args = parser.parse_args()
+    if args.step and args.start:
+        parser.error("use --step or --from, not both")
+    chosen = set(args.step or STEP_NAMES[STEP_NAMES.index(args.start) if args.start else 0:])
 
     with get_connection() as conn:
         for name, step in STEPS:
-            if args.step and name not in args.step:
+            if name not in chosen:
                 continue
             print(f"{name}...")
             try:
@@ -782,13 +826,22 @@ def main() -> None:
                 if len(problem.problems) > 40:
                     print(f"  ...and {len(problem.problems) - 40} more")
                 sys.exit(1)
+            except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn) as error:
+                conn.rollback()
+                print(f"\nStopped at '{name}'. Nothing from this step was saved. The database said:\n  {error}")
+                print(SCHEMA_TIP)
+                sys.exit(1)
             except psycopg.Error as error:
                 conn.rollback()
                 print(f"\nStopped at '{name}'. Nothing from this step was saved. The database said:\n  {error}")
                 print("Tip: run all the steps in order (no --step) so everything a step needs is already loaded.")
                 sys.exit(1)
 
-        summary = conn.execute("select check_name, problems from qa.summary where problems > 0").fetchall()
+        try:
+            summary = conn.execute("select check_name, problems from qa.summary where problems > 0").fetchall()
+        except psycopg.errors.UndefinedTable:
+            print("\nLoaded, but qa.summary is missing. " + SCHEMA_TIP)
+            sys.exit(1)
     if summary:
         print("\nLoaded. These checks found something to look at (select * from qa.<check name>):")
         for check, count in summary:
