@@ -1,0 +1,7 @@
+# .streamlit/config.toml: app look and server settings (no secrets here; those go in secrets.toml, which git ignores)
+[theme]
+base = "light"              # the chart colors are chosen for a light background
+primaryColor = "#2a78d6"
+
+[browser]
+gatherUsageStats = false

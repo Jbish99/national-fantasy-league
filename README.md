@@ -54,7 +54,7 @@ From the VS Code terminal:
 ```
 python -m etl.run_sql --all
 ```
-That runs every SQL file in order: `db/schema/001` → `007`, then `db/checks/001_validation.sql`, then
+That runs every SQL file in order: `db/schema/001` → `008`, then `db/checks/001_validation.sql`, then
 `db/seed/001_reference_data.sql`. Each file shows `ok`. Run it again **after every `git pull`** that changed
 a `.sql` file. It's harmless when nothing changed.
 
@@ -156,6 +156,22 @@ If `qa.league_players_without_nfl_id` or `qa.nfl_id_suspect` lists someone, add 
 (`player_id` = Sleeper id, `gsis_id` = NFL id, `note`), then run `python -m etl.load_nflverse --no-download`.
 `python -m etl.check_nflverse` prints what nflverse's files contain, if a column ever goes missing.
 
+## 9. The dashboard app (Phase 4)
+
+Run it on your computer from the project root (VS Code terminal, venv active):
+```
+streamlit run app/streamlit_app.py
+```
+Your browser opens at http://localhost:8501. Stop it with **Ctrl+C** in the terminal.
+The app reads `DATABASE_URL` (the pooled address) from `.env`. On Streamlit Community Cloud (Phase 5)
+the same name goes in the app's Secrets instead.
+
+Pages: Home (champions, latest week), Standings (all-time or one season), Head-to-head (matrix + any
+series), Champions & playoffs, Record book, Franchises (season by season, scoring trend, every opponent).
+Everything reads the official record through the views in `db/schema/008_app_views.sql`
+(`core.v_season_finish`, `core.v_season_standings`, `core.v_all_time_standings`), which also work in DBeaver.
+Results are cached for 10 minutes, so a fresh load shows up within that.
+
 ## Where the official history comes from
 
 - **`core.game`** is the official record of every game (2020 →). It's built from the All-In-One workbook.
@@ -181,7 +197,8 @@ db/reset_core.sql    drops core + qa for a clean rebuild (raw is kept)
 etl/                 scripts that pull from the APIs and load the database
 data/manual/         All-In-One.xlsx (the official league history workbook) and other hand-kept files
 data/cache/          big downloads like Sleeper /players/nfl (git-ignored)
-app/                 Streamlit app (coming in Phase 4)
+app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), pages/
+.streamlit/          config.toml (theme); secrets.toml is git-ignored
 ```
 
 ## Build phases
@@ -189,6 +206,6 @@ app/                 Streamlit app (coming in Phase 4)
 1. Database + schema ✅
 2. History backfill + validation ✅ (once the player-name review is done)
 3. NFL stats + player ID mapping ✅ (rebuilding DEF fantasy points is parked for Advanced Statistics)
-4. Streamlit first version ← next
+4. Streamlit first version ← in progress (history pages built; improvement pages next)
 5. Deploy
 6. Weekly in-season refresh
