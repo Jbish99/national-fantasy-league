@@ -1,5 +1,5 @@
 """
-app/pages/champions.py
+app/views/champions.py
 Titles by franchise, and each season's playoff and placement games.
 """
 

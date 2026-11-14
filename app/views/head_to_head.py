@@ -1,5 +1,5 @@
 """
-app/pages/head_to_head.py
+app/views/head_to_head.py
 Head-to-head matrix for every pair of franchises, and the full series between any two.
 """
 

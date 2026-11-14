@@ -426,6 +426,57 @@ where pw.points <> 0
 comment on view qa.league_defenses_without_stat_line is 'Sleeper DEF player-weeks with points but no NFL team stat line.';
 
 
+-- 23. Lineup slots the best-lineup calculation doesn't know (it handles QB RB WR TE FLEX K DEF BN).
+create or replace view qa.unknown_lineup_slots as
+select season, slot, count(*) as slots
+from core.roster_slot
+where slot not in ('QB', 'RB', 'WR', 'TE', 'FLEX', 'K', 'DEF', 'BN')
+group by season, slot;
+
+comment on view qa.unknown_lineup_slots is 'Lineup slots (e.g. SUPER_FLEX) that core.v_lineup_players doesn''t handle yet.';
+
+
+-- 24. Weeks where the "best possible lineup" scored less than the lineup actually started.
+--     That can't happen if positions are right, so a row here means a player's position is
+--     missing or unusual (the best-lineup numbers for that team-week are off).
+create or replace view qa.best_lineup_below_actual as
+select season, week, franchise_code, actual_points, best_points
+from core.v_lineup_week
+where best_points < actual_points - 0.01;
+
+comment on view qa.best_lineup_below_actual is 'Team-weeks where the best-lineup calculation fell short of the real lineup.';
+
+
+-- Not a problem list: our best-possible-lineup totals vs Sleeper's own "potential points"
+-- (rosters settings ppts), regular season, completed Sleeper seasons. A close match means
+-- the bench numbers on the Lineups page agree with Sleeper. Sleeper may treat injured-reserve
+-- players differently, so small gaps are possible.
+create or replace view qa.best_lineup_vs_sleeper as
+with sleeper as (
+    select r.season, (e ->> 'roster_id')::int as roster_id,
+           round((e -> 'settings' ->> 'ppts')::numeric
+                 + coalesce((e -> 'settings' ->> 'ppts_decimal')::numeric, 0) / 100, 2) as sleeper_potential_points
+    from raw.v_sleeper_latest r, jsonb_array_elements(r.payload) e
+    where r.endpoint = 'rosters'
+),
+ours as (
+    select season, franchise_code, sum(best_points) as best_points
+    from core.v_lineup_week
+    where is_regular_season
+    group by season, franchise_code
+)
+select o.season, o.franchise_code, round(o.best_points, 2) as our_best_points,
+       sl.sleeper_potential_points, round(o.best_points - sl.sleeper_potential_points, 2) as diff
+from ours o
+join core.season s on s.season = o.season and s.status = 'complete'
+join core.franchise_season fs on fs.season = o.season and fs.franchise_code = o.franchise_code
+join sleeper sl on sl.season = o.season and sl.roster_id = fs.sleeper_roster_id
+order by abs(o.best_points - sl.sleeper_potential_points) desc;
+
+comment on view qa.best_lineup_vs_sleeper is
+    'Info: season best-lineup points (ours) vs Sleeper''s potential points (ppts), per team, regular season.';
+
+
 -- Not a problem list: NFL id links that needed a decision (conflicts, duplicates, name matches).
 create or replace view qa.nfl_id_notes as
 select x.player_id, p.full_name, p.position, x.gsis_id, x.method, x.note
@@ -502,6 +553,8 @@ union all select 'nfl_id_shared',                       count(*) from qa.nfl_id_
 union all select 'nfl_stats_without_game',              count(*) from qa.nfl_stats_without_game
 union all select 'scoring_not_covered',                 count(*) from qa.scoring_not_covered
 union all select 'nfl_id_suspect',                      count(*) from qa.nfl_id_suspect
-union all select 'league_defenses_without_stat_line',   count(*) from qa.league_defenses_without_stat_line;
+union all select 'league_defenses_without_stat_line',   count(*) from qa.league_defenses_without_stat_line
+union all select 'unknown_lineup_slots',                count(*) from qa.unknown_lineup_slots
+union all select 'best_lineup_below_actual',            count(*) from qa.best_lineup_below_actual;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';

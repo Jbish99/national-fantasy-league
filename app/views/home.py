@@ -1,5 +1,5 @@
 """
-app/pages/home.py
+app/views/home.py
 Landing page: headline numbers, every champion, and the latest week's results.
 """
 

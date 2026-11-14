@@ -1,5 +1,5 @@
 """
-app/pages/franchises.py
+app/views/franchises.py
 One franchise's history: season by season, scoring trend, results against every opponent.
 """
 

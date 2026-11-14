@@ -1,5 +1,5 @@
 """
-app/pages/standings.py
+app/views/standings.py
 All-time standings, or one season's standings with final places.
 """
 

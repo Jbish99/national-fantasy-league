@@ -1,5 +1,5 @@
 """
-app/pages/record_book.py
+app/views/record_book.py
 League records: single-game highs and lows, blowouts, close games, combined scores, seasons.
 """
 

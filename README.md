@@ -54,7 +54,7 @@ From the VS Code terminal:
 ```
 python -m etl.run_sql --all
 ```
-That runs every SQL file in order: `db/schema/001` → `008`, then `db/checks/001_validation.sql`, then
+That runs every SQL file in order: `db/schema/001` → `009`, then `db/checks/001_validation.sql`, then
 `db/seed/001_reference_data.sql`. Each file shows `ok`. Run it again **after every `git pull`** that changed
 a `.sql` file. It's harmless when nothing changed.
 
@@ -166,11 +166,21 @@ Your browser opens at http://localhost:8501. Stop it with **Ctrl+C** in the term
 The app reads `DATABASE_URL` (the pooled address) from `.env`. On Streamlit Community Cloud (Phase 5)
 the same name goes in the app's Secrets instead.
 
-Pages: Home (champions, latest week), Standings (all-time or one season), Head-to-head (matrix + any
-series), Champions & playoffs, Record book, Franchises (season by season, scoring trend, every opponent).
-Everything reads the official record through the views in `db/schema/008_app_views.sql`
-(`core.v_season_finish`, `core.v_season_standings`, `core.v_all_time_standings`), which also work in DBeaver.
-Results are cached for 10 minutes, so a fresh load shows up within that.
+Pages, in two sidebar sections:
+- **League history:** Home (champions, latest week), Standings (all-time or one season), Head-to-head
+  (matrix + any series), Champions & playoffs, Record book, Franchises (season by season, scoring trend,
+  every opponent). These read the official record through `db/schema/008_app_views.sql`.
+- **Getting better:** Lineups (points left on the bench vs the best possible lineup, wrong start/sit calls),
+  Luck (actual record vs all-play record), Trades & waivers (what each side got, best pickups, FAAB),
+  Draft (each pick vs a replacement-level player at his position, compared with its round), Positions
+  (starters' points per week by position vs the league average). These read `db/schema/009_insight_views.sql`.
+
+Every view also works in DBeaver, e.g. `select * from core.v_lineup_week` or `core.v_draft_value`.
+Results are cached for 10 minutes, so new data shows up within that. To see it right away, open the app's
+**⋮** menu (top right) → **Clear cache**.
+
+Page files live in `app/views/` (not `app/pages/`: Streamlit treats a folder named `pages` as its old
+automatic menu, which breaks direct links to a page).
 
 ## Where the official history comes from
 
@@ -197,7 +207,7 @@ db/reset_core.sql    drops core + qa for a clean rebuild (raw is kept)
 etl/                 scripts that pull from the APIs and load the database
 data/manual/         All-In-One.xlsx (the official league history workbook) and other hand-kept files
 data/cache/          big downloads like Sleeper /players/nfl (git-ignored)
-app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), pages/
+app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), views/ (one file per page)
 .streamlit/          config.toml (theme); secrets.toml is git-ignored
 ```
 
@@ -206,6 +216,6 @@ app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), p
 1. Database + schema ✅
 2. History backfill + validation ✅ (once the player-name review is done)
 3. NFL stats + player ID mapping ✅ (rebuilding DEF fantasy points is parked for Advanced Statistics)
-4. Streamlit first version ← in progress (history pages built; improvement pages next)
+4. Streamlit first version ✅ (history + "getting better" pages)
 5. Deploy
 6. Weekly in-season refresh
