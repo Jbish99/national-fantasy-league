@@ -54,7 +54,7 @@ From the VS Code terminal:
 ```
 python -m etl.run_sql --all
 ```
-That runs every SQL file in order: `db/schema/001` → `006`, then `db/checks/001_validation.sql`, then
+That runs every SQL file in order: `db/schema/001` → `007`, then `db/checks/001_validation.sql`, then
 `db/seed/001_reference_data.sql`. Each file shows `ok`. Run it again **after every `git pull`** that changed
 a `.sql` file. It's harmless when nothing changed.
 
@@ -136,12 +136,15 @@ Downloads from nflverse (free, no key) and fills:
 - `core.player_xref`: each Sleeper player's NFL (gsis) id
 - `core.nfl_game`: every NFL game since 2020 with scores, roof, surface, temperature and wind
 - `core.nfl_player_week`: weekly stat lines for every QB, RB, WR, TE, K and FB
+- `core.nfl_team_week`: each NFL team's weekly defense / special-teams stat line (the real stat line behind
+  Sleeper's DEF players), plus the yards its opponent gained
 - `core.v_player_week_full`: every rostered Sleeper player-week next to the real stat line and game conditions
+- `core.v_def_week_full`: every rostered Sleeper defense-week next to that team's stat line and points allowed
 
 The downloaded files are saved in `data/cache/nflverse/` (git-ignored) and logged in `raw.nflverse_pull`.
 Each run re-downloads only what can still change (the ID crosswalk, the schedule, this season's stats).
 Options: `--refresh` (re-download everything), `--no-download` (rebuild from the saved files),
-`--step xref|games|stats`.
+`--step xref|games|stats|teams`.
 
 **Checking the NFL ids with points.** `core.v_nfl_league_points` scores every stat line with that season's
 league rules (from Sleeper's scoring settings). When a player's NFL id is right, it matches Sleeper's points:
@@ -185,7 +188,7 @@ app/                 Streamlit app (coming in Phase 4)
 
 1. Database + schema ✅
 2. History backfill + validation ✅ (once the player-name review is done)
-3. NFL stats + player ID mapping ← in progress (stat lines, games, ids, league-points check; defenses next)
-4. Streamlit first version
+3. NFL stats + player ID mapping ✅ (rebuilding DEF fantasy points is parked for Advanced Statistics)
+4. Streamlit first version ← next
 5. Deploy
 6. Weekly in-season refresh

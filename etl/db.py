@@ -80,8 +80,16 @@ def _explain_missing_url() -> str:
 
 
 def get_connection() -> psycopg.Connection:
-    """Open a new connection to the league database."""
-    return psycopg.connect(_connection_url())
+    """Open a new connection to the league database (or explain plainly why it can't)."""
+    try:
+        return psycopg.connect(_connection_url())
+    except psycopg.OperationalError as error:
+        reason = str(error).strip().splitlines()[0]
+        print("Couldn't connect to the database.\n"
+              f"  The database said: {reason}\n"
+              "  Check: your internet connection, and that DATABASE_URL_UNPOOLED in .env is copied exactly\n"
+              "  from Neon's Connect button (a 'password authentication failed' means it isn't).")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

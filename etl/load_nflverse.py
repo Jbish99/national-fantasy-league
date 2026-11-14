@@ -13,6 +13,8 @@ Steps, in order (each one is its own transaction):
   games     core.nfl_game: every NFL game with scores, roof, surface, temperature, wind
   stats     core.nfl_player_week: weekly stat lines for every QB, RB, WR, TE, K and FB,
             plus anyone who was ever on a league roster
+  teams     core.nfl_team_week: each NFL team's weekly defense / special-teams stat line
+            (the real stat line behind Sleeper's DEF players)
 
 How a Sleeper player gets an NFL id (core.player_xref.method):
   crosswalk      nflverse's ID crosswalk (covers ~99% of league players)
@@ -28,7 +30,7 @@ Run from the project root:
     python -m etl.load_nflverse                  # everything
     python -m etl.load_nflverse --refresh        # re-download every file, then load
     python -m etl.load_nflverse --no-download    # rebuild from the saved files only
-    python -m etl.load_nflverse --step stats     # one step (repeatable; download still runs first)
+    python -m etl.load_nflverse --step teams     # one step (repeatable; download still runs first)
 Then check:  select * from qa.summary;
 """
 
@@ -52,7 +54,7 @@ except ImportError:
 from etl.common import LoadProblem
 from etl.db import PROJECT_ROOT, get_connection
 from etl.match_players import normalize
-from etl.nfl_columns import CONTEXT_COLUMNS, GAME_COLUMNS, STAT_COLUMNS
+from etl.nfl_columns import CONTEXT_COLUMNS, GAME_COLUMNS, SLEEPER_DEF_IDS, STAT_COLUMNS, TEAM_DEFENSE_COLUMNS
 
 CACHE = PROJECT_ROOT / "data" / "cache" / "nflverse"
 OVERRIDES = PROJECT_ROOT / "data" / "manual" / "nfl_id_overrides.csv"
@@ -82,6 +84,8 @@ def file_plan(seasons):
     for s in seasons:
         plan.append(("player_stats", s, f"player_stats_{s}.parquet",
                      lambda s=s: nfl.load_player_stats([s], summary_level="week")))
+        plan.append(("team_stats", s, f"team_stats_{s}.parquet",
+                     lambda s=s: nfl.load_team_stats([s], summary_level="week")))
     return plan
 
 
@@ -361,7 +365,58 @@ def load_stats(conn):
         print(f"    note: columns not in nflverse's files, left empty: {', '.join(sorted(missing_seen))}")
 
 
-STEPS = [("xref", load_xref), ("games", load_games), ("stats", load_stats)]
+def load_teams(conn):
+    seasons, _ = season_range(conn)
+    defense = [c for c, _ in TEAM_DEFENSE_COLUMNS]
+    cleaners = [cleaner(t, c) for c, t in TEAM_DEFENSE_COLUMNS]
+    table_cols = (["team", "season", "week", "season_type", "game_id", "opponent_team", "sleeper_def_id"] + defense
+                  + ["opp_passing_yards", "opp_sack_yards_lost", "opp_rushing_yards", "net_yards_allowed"])
+    total, problems = 0, []
+    for season in seasons:
+        df = read(f"team_stats_{season}.parquet")
+        needed = ["team", "season", "week", "season_type", "game_id", "opponent_team",
+                  "passing_yards", "sack_yards_lost", "rushing_yards"]
+        missing = [c for c in needed if c not in df.columns]
+        if missing:
+            raise LoadProblem("teams", [f"team_stats_{season}.parquet has no {', '.join(missing)} column(s)"])
+        for col in defense:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None).alias(col))
+        # what each team's opponent gained = that opponent's own offense row in the same game
+        offense = df.select(pl.col("game_id"), pl.col("team").alias("opponent_team"),
+                            pl.col("passing_yards").alias("opp_passing_yards"),
+                            pl.col("sack_yards_lost").alias("opp_sack_yards_lost"),
+                            pl.col("rushing_yards").alias("opp_rushing_yards"))
+        df = df.join(offense, on=["game_id", "opponent_team"], how="left")
+        if df.group_by("team", "week").len().filter(pl.col("len") > 1).height:
+            problems.append(f"{season}: a team appears twice in one week")
+            continue
+        rows = []
+        for r in df.select(["team", "season", "week", "season_type", "game_id", "opponent_team"] + defense
+                           + ["opp_passing_yards", "opp_sack_yards_lost", "opp_rushing_yards"]).iter_rows():
+            try:
+                stats = [f(v) for f, v in zip(cleaners, r[6:6 + len(defense)])]
+            except ValueError as error:
+                problems.append(f"{season}: {error}")
+                break
+            opp = r[6 + len(defense):]
+            net = None if None in opp else opp[0] + opp[1] + opp[2]
+            rows.append([r[0], r[1], r[2], r[3], r[4], r[5], SLEEPER_DEF_IDS.get(r[0], r[0])] + stats + list(opp) + [net])
+        if problems:
+            continue
+        conn.execute("delete from core.nfl_team_week where season = %s", (season,))
+        copy_rows(conn, "core.nfl_team_week", table_cols, rows)
+        total += len(rows)
+    if problems:
+        raise LoadProblem("teams", problems)
+    linked = conn.execute(
+        "select count(distinct p.player_id) from core.player p "
+        "where p.position = 'DEF' and exists (select 1 from core.nfl_team_week t where t.sleeper_def_id = p.player_id)"
+    ).fetchone()[0]
+    print(f"    {total:,} team-weeks for {seasons[0]}-{seasons[-1]}; {linked} Sleeper defenses linked")
+
+
+STEPS = [("xref", load_xref), ("games", load_games), ("stats", load_stats), ("teams", load_teams)]
 
 
 def main():

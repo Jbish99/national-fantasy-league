@@ -410,6 +410,22 @@ comment on view qa.nfl_id_suspect is
     'League players whose rebuilt points mostly disagree with Sleeper (likely a wrong NFL id). Fix in data/manual/nfl_id_overrides.csv.';
 
 
+-- 22. Rostered Sleeper defenses that scored points in a week with no NFL team stat line
+--     (a team-code mismatch, e.g. Sleeper LAR vs nflverse LA). The cancelled 2022 week 17
+--     Bills-Bengals game has no official stats, so those two are left out.
+create or replace view qa.league_defenses_without_stat_line as
+select pw.season, pw.week, pw.franchise_code, pw.player_id as defense, pw.points
+from core.player_week pw
+join core.player p on p.player_id = pw.player_id and p.position = 'DEF'
+where pw.points <> 0
+  and not (pw.season = 2022 and pw.week = 17 and pw.player_id in ('BUF', 'CIN'))
+  and not exists (select 1 from core.nfl_team_week t
+                  where t.sleeper_def_id = pw.player_id and t.season = pw.season and t.week = pw.week
+                    and t.season_type = 'REG');
+
+comment on view qa.league_defenses_without_stat_line is 'Sleeper DEF player-weeks with points but no NFL team stat line.';
+
+
 -- Not a problem list: NFL id links that needed a decision (conflicts, duplicates, name matches).
 create or replace view qa.nfl_id_notes as
 select x.player_id, p.full_name, p.position, x.gsis_id, x.method, x.note
@@ -485,6 +501,7 @@ union all select 'league_players_without_nfl_id',       count(*) from qa.league_
 union all select 'nfl_id_shared',                       count(*) from qa.nfl_id_shared
 union all select 'nfl_stats_without_game',              count(*) from qa.nfl_stats_without_game
 union all select 'scoring_not_covered',                 count(*) from qa.scoring_not_covered
-union all select 'nfl_id_suspect',                      count(*) from qa.nfl_id_suspect;
+union all select 'nfl_id_suspect',                      count(*) from qa.nfl_id_suspect
+union all select 'league_defenses_without_stat_line',   count(*) from qa.league_defenses_without_stat_line;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';

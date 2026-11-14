@@ -81,3 +81,18 @@ GAME_COLUMNS = [
     ("away_coach", "away_coach", "text"), ("home_coach", "home_coach", "text"),
     ("referee", "referee", "text"), ("pfr_game_id", "pfr", "text"), ("espn_game_id", "espn", "text"),
 ]
+
+# core.nfl_team_week: a team's defense and special-teams stat line each week (from nflverse
+# weekly team stats). Types checked against the real 2020-2026 files (2026-11-13).
+TEAM_DEFENSE_COLUMNS = [
+    ("def_sacks", "numeric"), ("def_sack_yards", "numeric"), ("def_qb_hits", "integer"),
+    ("def_interceptions", "integer"), ("def_interception_yards", "integer"), ("def_fumbles_forced", "integer"),
+    ("fumble_recovery_opp", "integer"), ("fumble_recovery_tds", "integer"), ("def_tds", "integer"),
+    ("def_safeties", "integer"), ("def_tackles_for_loss", "integer"), ("def_pass_defended", "integer"),
+    ("def_punt_blocks", "integer"), ("def_fg_blocks", "integer"), ("def_pat_blocks", "integer"),
+    ("def_2pt_made", "integer"), ("special_teams_tds", "integer"), ("punt_return_yards", "integer"),
+    ("kickoff_return_yards", "integer"),
+]
+
+# nflverse team code -> Sleeper's defense player id, where they differ
+SLEEPER_DEF_IDS = {"LA": "LAR"}
