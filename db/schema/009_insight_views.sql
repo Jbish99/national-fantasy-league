@@ -12,19 +12,51 @@
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- Lineups. The best possible lineup uses the season's lineup slots: each fixed
--- slot (QB, RB, WR, TE, K, DEF) takes that position's top scorers, then FLEX takes
--- the best remaining RB/WR/TE. (Filling fixed slots first is always optimal here,
--- because FLEX accepts every position the fixed slots do.) Positions are Sleeper's
--- primary position for each player.
+-- Lineup slots usable each week. Normally the season's slots. But if EVERY team
+-- left the same slot empty that week, it wasn't really usable, so it doesn't
+-- count. Known case: 2021 week 17, every team's second FLEX is empty in Sleeper's
+-- data, though the league never turned it off (Jaden, 2026-11-15). The official
+-- scores were scored without it too. One team leaving a slot empty still counts
+-- as that team's miss (e.g. GRL's empty K in 2026 week 9).
+-- ---------------------------------------------------------------------
+create or replace view core.v_lineup_slots_week as
+with season_slots as (
+    select season, slot, count(*) as season_slots
+    from core.roster_slot
+    where slot <> 'BN'
+    group by season, slot
+),
+filled as (                                -- how many of each slot each team filled that week
+    select season, week, franchise_code, lineup_slot as slot, count(*) as n
+    from core.player_week
+    where is_starter
+    group by season, week, franchise_code, lineup_slot
+)
+select w.season, w.week, ss.slot, ss.season_slots,
+       least(ss.season_slots, coalesce(max(f.n), 0)) as usable_slots
+from (select distinct season, week from core.team_week) w
+join season_slots ss on ss.season = w.season
+left join filled f on f.season = w.season and f.week = w.week and f.slot = ss.slot
+group by w.season, w.week, ss.slot, ss.season_slots;
+
+comment on view core.v_lineup_slots_week is
+    'Lineup slots per week for the best-lineup math. usable_slots < season_slots when every team left that slot empty that week.';
+
+
+-- ---------------------------------------------------------------------
+-- Lineups. The best possible lineup uses that week's usable slots (above): each
+-- fixed slot (QB, RB, WR, TE, K, DEF) takes that position's top scorers, then FLEX
+-- takes the best remaining RB/WR/TE. (Filling fixed slots first is always optimal
+-- here, because FLEX accepts every position the fixed slots do.) Positions are
+-- Sleeper's primary position for each player.
 -- ---------------------------------------------------------------------
 create or replace view core.v_lineup_players as
 with slots as (
-    select season,
-           coalesce(sum(n) filter (where slot = 'FLEX'), 0) as flex_slots,
-           jsonb_object_agg(slot, n) filter (where slot <> 'FLEX') as fixed_slots   -- {"QB": 1, "RB": 2, ...}
-    from (select season, slot, count(*) as n from core.roster_slot where slot <> 'BN' group by season, slot) s
-    group by season
+    select season, week,
+           coalesce(sum(usable_slots) filter (where slot = 'FLEX'), 0) as flex_slots,
+           jsonb_object_agg(slot, usable_slots) filter (where slot <> 'FLEX') as fixed_slots   -- {"QB": 1, "RB": 2, ...}
+    from core.v_lineup_slots_week
+    group by season, week
 ),
 ranked as (
     select pw.season, pw.week, pw.franchise_code, pw.player_id, pw.points, pw.is_starter, pw.lineup_slot,
@@ -35,7 +67,7 @@ ranked as (
            sl.flex_slots
     from core.player_week pw
     join core.player p on p.player_id = pw.player_id
-    join slots sl on sl.season = pw.season
+    join slots sl on sl.season = pw.season and sl.week = pw.week
 ),
 flagged as (
     select r.*,

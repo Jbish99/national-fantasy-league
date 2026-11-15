@@ -45,6 +45,15 @@ table(
 st.caption("Wrong calls = players who belonged in the best lineup but sat on the bench. "
            "The best lineup is figured with hindsight, so nobody gets 100% every week.")
 
+# weeks where every team left the same slot empty: that slot isn't counted that week (e.g. 2021 week 17)
+short = query("select season, week, slot, season_slots, usable_slots from core.v_lineup_slots_week "
+              "where usable_slots < season_slots order by season, week, slot")
+if choice != "All seasons":
+    short = short[short["season"] == choice]
+for r in short.itertuples():
+    st.caption(f"{r.season} week {r.week}: every team's lineup was missing a {r.slot} spot in Sleeper's data "
+               f"({r.usable_slots} of {r.season_slots} filled), so that week's best lineup uses {r.usable_slots}.")
+
 bars = alt.Chart(summary).mark_bar(color=SERIES_BLUE, cornerRadiusEnd=4, height={"band": 0.7}).encode(
     x=alt.X("per_week:Q", title="Points left on the bench per week"),
     y=alt.Y("franchise:N", sort="-x", title=None),
