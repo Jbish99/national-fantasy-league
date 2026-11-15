@@ -1,0 +1,9 @@
+# app/requirements.txt
+# Packages for the deployed dashboard ONLY. Streamlit Community Cloud uses this file because it
+# sits next to the entrypoint (app/streamlit_app.py), so the cloud skips the ETL-only packages
+# (nflreadpy/polars, openpyxl, requests).
+# On your computer, keep using the root requirements.txt (it has everything, including these).
+streamlit>=1.50          # brings altair (charts) with it
+psycopg[binary]>=3.2
+pandas>=2.2
+python-dotenv>=1.0       # app/lib.py reads .env when there's no secrets.toml

@@ -54,7 +54,7 @@ From the VS Code terminal:
 ```
 python -m etl.run_sql --all
 ```
-That runs every SQL file in order: `db/schema/001` → `009`, then `db/checks/001_validation.sql`, then
+That runs every SQL file in order: `db/schema/001` → `010`, then `db/checks/001_validation.sql`, then
 `db/seed/001_reference_data.sql`. Each file shows `ok`. Run it again **after every `git pull`** that changed
 a `.sql` file. It's harmless when nothing changed.
 
@@ -182,6 +182,39 @@ Results are cached for 10 minutes, so new data shows up within that. To see it r
 Page files live in `app/views/` (not `app/pages/`: Streamlit treats a folder named `pages` as its old
 automatic menu, which breaks direct links to a page).
 
+## 10. Put the app online (Phase 5)
+
+The app goes on **Streamlit Community Cloud**, which runs it straight from the GitHub repo. It logs in to Neon
+as **`app_reader`**, a read-only login: it can read the `core` tables and views, and nothing else, so the
+website can never change the league history.
+
+**One-time setup, on your computer (project root, venv active):**
+1. `python -m etl.run_sql --all` creates the `app_reader` role (no password yet) and gives it read access
+   (`db/schema/010_app_reader.sql`).
+2. `python -m etl.setup_app_login` sets a long random password, tests that the login can read but not
+   write, and saves the connection string to `.streamlit/secrets.toml` (git-ignored, never committed).
+   The app reads that file before `.env`, so `streamlit run app/streamlit_app.py` now uses the read-only login
+   too. That's your test before deploying.
+3. At https://share.streamlit.io sign in with GitHub (allow access to private repos), then **Create app**:
+   repository `Jbish99/national-fantasy-league`, branch `main`, main file path `app/streamlit_app.py`,
+   pick an App URL. Under **Advanced settings → Secrets**, paste everything in `.streamlit/secrets.toml`.
+   Leave the Python version at the default. Click **Deploy**.
+4. Sharing: an app from a private repo starts **private**. Either make it public (app **Settings → Sharing**;
+   anyone with the link can open it, and public apps get indexed by search engines), or keep it private and
+   invite each friend by email (Community Cloud allows one private app; viewers sign in to see it).
+
+**After that:**
+- Every push to `main` on GitHub updates the app by itself.
+- SQL changes still need `python -m etl.run_sql --all` from your computer. The website never changes the database.
+- With no visitors for 12 hours, the app goes to sleep. Anyone opening it can click **"Yes, get this app back
+  up!"** and it starts back up. Neon also pauses when idle, so the first page after a quiet
+  spell takes a few extra seconds.
+- To change the app's password: run `python -m etl.setup_app_login` again, then paste the new
+  `.streamlit/secrets.toml` into the app's **Settings → Secrets** on Streamlit Cloud. The old password stops
+  working right away.
+- The cloud installs only `app/requirements.txt` (the app's packages). Your computer keeps using the root
+  `requirements.txt`, which has everything.
+
 ## Where the official history comes from
 
 - **`core.game`** is the official record of every game (2020 →). It's built from the All-In-One workbook.
@@ -204,11 +237,12 @@ db/schema/           numbered SQL files, run in order
 db/checks/           validation views (qa schema): each returns only problem rows
 db/seed/             hand-maintained reference data (franchises, seasons, keeper rules, result overrides)
 db/reset_core.sql    drops core + qa for a clean rebuild (raw is kept)
-etl/                 scripts that pull from the APIs and load the database
+etl/                 scripts that pull from the APIs and load the database (+ setup_app_login.py)
 data/manual/         All-In-One.xlsx (the official league history workbook) and other hand-kept files
 data/cache/          big downloads like Sleeper /players/nfl (git-ignored)
-app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), views/ (one file per page)
-.streamlit/          config.toml (theme); secrets.toml is git-ignored
+app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), views/ (one file per page),
+                     requirements.txt (only what the deployed app needs)
+.streamlit/          config.toml (theme); secrets.toml (the app's read-only login) is git-ignored
 ```
 
 ## Build phases
