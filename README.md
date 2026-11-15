@@ -54,7 +54,7 @@ From the VS Code terminal:
 ```
 python -m etl.run_sql --all
 ```
-That runs every SQL file in order: `db/schema/001` → `010`, then `db/checks/001_validation.sql`, then
+That runs every SQL file in order: `db/schema/001` → `011`, then `db/checks/001_validation.sql`, then
 `db/seed/001_reference_data.sql`. Each file shows `ok`. Run it again **after every `git pull`** that changed
 a `.sql` file. It's harmless when nothing changed.
 
@@ -215,6 +215,28 @@ website can never change the league history.
 - The cloud installs only `app/requirements.txt` (the app's packages). Your computer keeps using the root
   `requirements.txt`, which has everything.
 
+## 11. Weekly refresh (Phase 6)
+
+**GitHub refreshes the database every morning** (`.github/workflows/refresh.yml`, about 5:20 AM Eastern).
+It runs `python -m etl.refresh`, which does, in order: `run_sql --all` → `pull_sleeper` (this season) →
+`load_workbook` → `load_core` → `load_nflverse` → the checks. You can run the same command on your computer.
+
+- **New weeks show up from Sleeper right away.** Once Sleeper marks a regular-season week as scored, its games
+  go into the official record as *provisional* (`core.game.is_provisional`). Pages say which weeks are
+  provisional. When the workbook gets that week, its version replaces them (same game ids) and adds the
+  workbook-only tags (Game of the Week, division/conference game, IST). Playoff games still come only from
+  the workbook.
+- **Workbook updates:** download the new All-In-One.xlsx, replace `data/manual/All-In-One.xlsx`, then commit
+  and push it (VS Code Source Control: message, Commit, Sync). The next morning's run loads it, or run the
+  workflow by hand: GitHub → **Actions** → **Refresh league data** → **Run workflow**.
+- **When something's wrong** the run fails (red X on the Actions tab) and GitHub emails you. The run's page
+  lists which history check needs a look (`select * from qa.<check name>;` in DBeaver). NFL-stat and lineup
+  checks only warn, because nflverse can trail Sleeper by a day.
+- **New season:** when the league renews, Sleeper gives it a new league id. Put it in `.env` and in
+  `.github/workflows/refresh.yml` (`SLEEPER_CURRENT_LEAGUE_ID`).
+- **Secret:** the workflow needs the repository secret `DATABASE_URL_UNPOOLED` (Settings → Secrets and
+  variables → Actions), the same value as in your `.env`.
+
 ## Where the official history comes from
 
 - **`core.game`** is the official record of every game (2020 →). It's built from the All-In-One workbook.
@@ -237,12 +259,13 @@ db/schema/           numbered SQL files, run in order
 db/checks/           validation views (qa schema): each returns only problem rows
 db/seed/             hand-maintained reference data (franchises, seasons, keeper rules, result overrides)
 db/reset_core.sql    drops core + qa for a clean rebuild (raw is kept)
-etl/                 scripts that pull from the APIs and load the database (+ setup_app_login.py)
+etl/                 scripts that pull from the APIs and load the database (+ setup_app_login.py, refresh.py)
 data/manual/         All-In-One.xlsx (the official league history workbook) and other hand-kept files
 data/cache/          big downloads like Sleeper /players/nfl (git-ignored)
 app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), views/ (one file per page),
                      requirements.txt (only what the deployed app needs)
 .streamlit/          config.toml (theme); secrets.toml (the app's read-only login) is git-ignored
+.github/workflows/   refresh.yml: the daily refresh on GitHub
 ```
 
 ## Build phases
@@ -251,5 +274,5 @@ app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), v
 2. History backfill + validation ✅ (once the player-name review is done)
 3. NFL stats + player ID mapping ✅ (rebuilding DEF fantasy points is parked for Advanced Statistics)
 4. Streamlit first version ✅ (history + "getting better" pages)
-5. Deploy
-6. Weekly in-season refresh
+5. Deploy ✅ (https://national-fantasy-league.streamlit.app/)
+6. Weekly in-season refresh ✅ (GitHub Actions, daily)

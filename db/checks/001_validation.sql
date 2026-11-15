@@ -184,16 +184,19 @@ where c.games <> (select max(games) from counts m where m.season = c.season);
 comment on view qa.regular_season_game_count is 'A franchise played fewer regular-season games than others that season.';
 
 
--- 11. Each season that has reached the postseason has exactly one Fantasy Bowl.
+-- 11. Each finished season has exactly one Fantasy Bowl. A season still being played
+--     (playoffs under way, final not in the workbook yet) only fails if it has more than one.
 create or replace view qa.fantasy_bowl_count as
-select s.season, count(g.game_id) as fantasy_bowls
+select s.season, count(g.game_id) as fantasy_bowls, s.status   -- new column last, so create-or-replace works
 from core.season s
 left join core.game g on g.season = s.season and g.designation = 'Fantasy Bowl'
 where s.season in (select distinct season from core.game where game_type <> 'regular')
-group by s.season
-having count(g.game_id) <> 1;
+group by s.season, s.status
+having count(g.game_id) > 1
+    or (count(g.game_id) = 0 and coalesce(s.status, 'complete') = 'complete');
 
-comment on view qa.fantasy_bowl_count is 'A season with postseason games but not exactly one Fantasy Bowl.';
+comment on view qa.fantasy_bowl_count is
+    'A finished season without exactly one Fantasy Bowl, or any season with more than one.';
 
 
 -- 12. Overrides in the seed file that don't match any loaded game (typo in a Game ID?).

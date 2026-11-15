@@ -6,7 +6,7 @@ Landing page: headline numbers, every champion, and the latest week's results.
 import pandas as pd
 import streamlit as st
 
-from lib import table, footer, full_name, query, record, team_games, text
+from lib import table, footer, full_name, provisional_weeks, query, record, team_games, text
 
 st.title("National Fantasy League")
 st.caption("League history since 2020: every game, every season, every champion.")
@@ -64,6 +64,8 @@ latest_week = int(games.loc[games["season"] == latest_season, "week"].max())
 left, right = st.columns([3, 2], gap="large")
 with left:
     st.subheader(f"Latest results: {latest_season}, week {latest_week}")
+    if latest_week in provisional_weeks().get(latest_season, []):
+        st.caption("Provisional: straight from Sleeper, not in the workbook yet.")
     week = games[(games["season"] == latest_season) & (games["week"] == latest_week) & (games["result"] != "L")]
     week = week.sort_values("points_for", ascending=False).drop_duplicates("game_id")
     table(

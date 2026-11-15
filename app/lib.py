@@ -141,6 +141,28 @@ def table(data, container=None, **kwargs):
     (container or st).dataframe(data, **kwargs)
 
 
+def provisional_weeks():
+    """{season: [weeks]} whose games came straight from Sleeper because the workbook doesn't have them yet."""
+    df = query("select distinct season, week from core.game where is_provisional order by season, week")
+    weeks = {}
+    for r in df.itertuples():
+        weeks.setdefault(int(r.season), []).append(int(r.week))
+    return weeks
+
+
+def week_list(weeks):
+    """[10, 11] -> 'weeks 10-11'; [10] -> 'week 10'; [10, 12] -> 'weeks 10, 12'."""
+    if len(weeks) == 1:
+        return f"week {weeks[0]}"
+    if weeks == list(range(weeks[0], weeks[-1] + 1)):
+        return f"weeks {weeks[0]}-{weeks[-1]}"
+    return "weeks " + ", ".join(str(w) for w in weeks)
+
+
 def footer():
     st.caption("Official results come from the league's All-In-One workbook; scores from 2021 on use Sleeper's "
                "stat-corrected numbers except 2023 (workbook). 2022 Fantasy Bowl: co-champions.")
+    for season, weeks in provisional_weeks().items():
+        st.caption(f"{season} {week_list(weeks)} {'is' if len(weeks) == 1 else 'are'} provisional, straight from "
+                   "Sleeper. Once the workbook is updated, its version replaces these games "
+                   "(adding Game of the Week and division tags).")

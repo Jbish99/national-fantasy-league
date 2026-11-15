@@ -1,0 +1,68 @@
+# .github/workflows/refresh.yml
+# Phase 6: refresh the league database every morning, on GitHub's computers (no PC needed).
+# It runs  python -m etl.refresh : Sleeper -> workbook -> clean tables -> NFL stats -> checks.
+#
+# Needs one repository secret (Settings -> Secrets and variables -> Actions):
+#   DATABASE_URL_UNPOOLED   Neon's direct address (the same line as in your .env)
+# Run it by hand any time: Actions tab -> "Refresh league data" -> "Run workflow".
+# A failed run (a step broke, or a history check needs a look) shows a red X and emails you.
+
+name: Refresh league data
+
+on:
+  schedule:
+    - cron: "23 10 * * *"      # every day at 10:23 UTC = 5:23 AM Eastern (6:23 in summer time)
+  workflow_dispatch:            # the "Run workflow" button
+
+concurrency:
+  group: refresh                # never two refreshes at once
+  cancel-in-progress: false
+
+permissions:
+  contents: read                # it only reads the repo; it never pushes
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
+      # This season's Sleeper league. When the league renews for a new season, Sleeper gives it a
+      # new id: update it here AND in your .env.
+      SLEEPER_CURRENT_LEAGUE_ID: "1334317252626882560"
+    steps:
+      - name: Check the database secret is set
+        if: env.DATABASE_URL_UNPOOLED == ''
+        run: |
+          echo "::error::The DATABASE_URL_UNPOOLED secret isn't set. Add it under Settings > Secrets and variables > Actions."
+          exit 1
+
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Files downloaded on earlier runs (Sleeper's player list, older seasons' NFL stats), so each
+      # run only re-downloads what can still change.
+      - name: Restore downloaded files
+        uses: actions/cache/restore@v5
+        with:
+          path: data/cache
+          key: etl-cache-${{ github.run_id }}
+          restore-keys: etl-cache-
+
+      - name: Install packages
+        run: pip install -r requirements.txt
+
+      - name: Refresh
+        run: python -m etl.refresh
+
+      - name: Save downloaded files for next time
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: data/cache
+          key: etl-cache-${{ github.run_id }}

@@ -379,18 +379,56 @@ def load_games(conn):
             game_id, season, week, game_type, d.get("Special Designation"), t1, t2, p1, p2, winner, source, note,
             d.get("Inter. Location"), to_bool(d.get("Game of the Week")),
             to_bool(d.get("Division")), to_bool(d.get("Conference")),
+            False,                                                   # is_provisional
         ))
 
     if problems:
         raise LoadProblem("games", problems)
+
+    # Provisional games (db/schema/011): a regular-season week Sleeper has finished scoring but the workbook
+    # doesn't have yet, in seasons whose official scores come from Sleeper. Team by team: if the workbook
+    # already has a team's game that week (e.g. a half-entered week), the workbook's game wins.
+    # When the workbook catches up, its row has the same game_id and replaces the provisional one.
+    has_game = {(g[1], g[2], code) for g in games for code in (g[5], g[6])}
+    pairs = conn.execute(
+        """
+        select tw.season, tw.week, min(tw.franchise_code), max(tw.franchise_code)
+        from core.team_week tw
+        join core.season s on s.season = tw.season
+        where s.official_scores_from = 'sleeper'
+          and tw.matchup_id is not null
+          and tw.week < s.playoff_week_start            -- regular season only; playoffs wait for the workbook
+          and tw.week <= s.last_scored_week             -- weeks Sleeper has marked as scored
+        group by tw.season, tw.week, tw.matchup_id
+        having count(*) = 2
+        order by 1, 2, 3
+        """
+    ).fetchall()
+    for season, week, t1, t2 in pairs:
+        if (season, week, t1) in has_game or (season, week, t2) in has_game:
+            continue
+        game_id = f"{season}-{week}-{t1}-{t2}"
+        p1, p2 = sleeper[(season, week, t1)], sleeper[(season, week, t2)]
+        winner = winner_of(t1, t2, p1, p2)
+        note = "Provisional: from Sleeper; the All-In-One workbook doesn't have this week yet"
+        if game_id in overrides:
+            override_winner, scores_known, override_note = overrides[game_id]
+            winner, note = override_winner, f"{note}. {override_note}"
+            if not scores_known:
+                p1 = p2 = None
+            counts["overridden"] += 1
+        counts["provisional"] += 1
+        games.append((game_id, season, week, "regular", None, t1, t2, p1, p2, winner, "sleeper", note,
+                      None, False, False, False, True))
 
     with conn.cursor() as cur:
         cur.executemany(
             """
             insert into core.game (game_id, season, week, game_type, designation, team1_code, team2_code,
                                    team1_points, team2_points, winner_code, points_source, result_note,
-                                   international_location, is_game_of_week, is_division_game, is_conference_game)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   international_location, is_game_of_week, is_division_game, is_conference_game,
+                                   is_provisional)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             on conflict (game_id) do update set
                 season = excluded.season, week = excluded.week, game_type = excluded.game_type,
                 designation = excluded.designation, team1_points = excluded.team1_points,
@@ -398,14 +436,15 @@ def load_games(conn):
                 points_source = excluded.points_source, result_note = excluded.result_note,
                 international_location = excluded.international_location,
                 is_game_of_week = excluded.is_game_of_week, is_division_game = excluded.is_division_game,
-                is_conference_game = excluded.is_conference_game
+                is_conference_game = excluded.is_conference_game, is_provisional = excluded.is_provisional
             """,
             games,
         )
     removed = conn.execute("delete from core.game where not (game_id = any(%s))",
                            ([g[0] for g in games],)).rowcount
     print(f"    {len(games)} games: {counts['sleeper']} with Sleeper scores, {counts['sheet']} with workbook scores, "
-          f"{counts['overridden']} with a seed override" + (f", {removed} old game(s) removed" if removed else ""))
+          f"{counts['overridden']} with a seed override, {counts['provisional']} provisional from Sleeper"
+          + (f", {removed} old game(s) removed" if removed else ""))
 
 
 def _bracket_from(source):
