@@ -143,7 +143,10 @@ def table(data, container=None, **kwargs):
 
 def provisional_weeks():
     """{season: [weeks]} whose games came straight from Sleeper because the workbook doesn't have them yet."""
-    df = query("select distinct season, week from core.game where is_provisional order by season, week")
+    try:
+        df = query("select distinct season, week from core.game where is_provisional order by season, week")
+    except psycopg.Error:                  # database not updated yet (db/schema/011 not run): no note, no crash
+        return {}
     weeks = {}
     for r in df.itertuples():
         weeks.setdefault(int(r.season), []).append(int(r.week))
