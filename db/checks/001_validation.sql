@@ -478,6 +478,7 @@ where not (pw.season = 2022 and pw.week = 17 and pw.player_id in ('BUF', 'CIN'))
 
 comment on view qa.def_points_vs_sleeper is 'Info: Sleeper DEF points vs points rebuilt from nflverse, per rostered defense-week.';
 
+drop view if exists qa.summary;                  -- depends on the next view; recreated at the end of this file
 drop view if exists qa.def_points_accuracy_low;
 drop view if exists qa.def_points_accuracy;      -- info view; dropped so its columns can change
 create view qa.def_points_accuracy as
