@@ -15,7 +15,7 @@ import streamlit as st
 
 from lib import (SERIES_BLUE, SERIES_ORANGE, WEATHER, box_url, chip, city, conditions, esc, footer, full_name, html,
                  html_table, injury_tag, link, logo, nfl_game_text, position_chip, pts, query, require, section,
-                 show_chart, signed, snaps_text, stat_cell, stat_strip, team, text, week_extras)
+                 show_chart, signed, snaps_text, stat_cell, stat_strip, team, text, trade_url, week_extras)
 
 require("core.v_player_game_log")
 
@@ -238,16 +238,16 @@ moves = query(
         where dp.player_id = %(p)s
     )
     select season, 0 as week, null::timestamptz as at, case when kept then 'kept' else 'drafted' end as move,
-           franchise_code, round, pick_no, pick_no_is_estimated, null::int as bid
+           franchise_code, round, pick_no, pick_no_is_estimated, null::int as bid, null::text as transaction_id
     from picks
     union all
-    select k.season, 0, null, 'kept', k.franchise_code, null, null, false, null
+    select k.season, 0, null, 'kept', k.franchise_code, null, null, false, null, null
     from core.keeper k
     where k.player_id = %(p)s
       and not exists (select 1 from picks p where p.season = k.season and p.franchise_code = k.franchise_code)
     union all
     select t.season, t.week, t.created_at, t.type || '_' || tp.action, tp.franchise_code, null, null, false,
-           case when t.type = 'waiver' then t.waiver_bid end
+           case when t.type = 'waiver' then t.waiver_bid end, t.transaction_id
     from core.transaction t
     join core.transaction_player tp on tp.transaction_id = t.transaction_id
     where tp.player_id = %(p)s and t.status = 'complete'
@@ -274,6 +274,8 @@ else:
         who = team(m.franchise_code, m.season, size=22) if isinstance(m.franchise_code, str) else \
             '<span class="muted">Team not on file</span>'
         move = chip(what, "plain") if m.move in ("drafted", "kept") else esc(what)
+        if m.move == "trade_add":                                   # Phase 9: opens the trade in the Trade analyzer
+            move = link(trade_url(m.transaction_id), esc(what))
         if detail:
             move += f' <span class="muted small" style="white-space:nowrap">{esc(detail)}</span>'
         body.append([f'<span class="yr">{m.season}</span>', "Draft" if m.week == 0 else f"Week {m.week}", move, who])

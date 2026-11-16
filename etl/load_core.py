@@ -15,7 +15,8 @@ Steps, in order (each one is its own transaction, so a failure leaves earlier st
   games         core.game, the OFFICIAL record: workbook games, the
                 season score policy, and the seed overrides              (workbook + Sleeper)
   playoffs      Sleeper's brackets (reference only)                      (Sleeper)
-  drafts        drafts and picks, 2021 on                                (Sleeper)
+  drafts        drafts and picks, 2021 on, and whose slot each draft
+                column was (for traded picks)                            (Sleeper)
   transactions  trades, waivers, adds/drops, traded picks, traded FAAB   (Sleeper)
   rankings      weekly top-4 power rankings                              (workbook)
   awards        individual and team awards                               (workbook)
@@ -489,10 +490,19 @@ def load_playoffs(conn):
 
 def load_drafts(conn):
     rosters = roster_map(conn)
-    drafts = 0
+    # (season, Sleeper user_id) -> franchise, for Sleeper's draft_order (user_id -> draft slot)
+    by_user = {
+        (season, uid): code
+        for season, uid, code in conn.execute(
+            "select fs.season, o.sleeper_user_id, fs.franchise_code from core.franchise_season fs "
+            "join core.owner o on o.owner_id = fs.owner_id where o.sleeper_user_id is not null"
+        )
+    }
+    drafts, slot_rows = 0, []
     for season, _, d in latest(conn, "draft"):
         if not d:
             continue
+        draft_season = int(d.get("season") or season)
         conn.execute(
             """
             insert into core.draft (draft_id, season, draft_type, rounds, status, started_at, source)
@@ -501,10 +511,26 @@ def load_drafts(conn):
                 season = excluded.season, draft_type = excluded.draft_type, rounds = excluded.rounds,
                 status = excluded.status, started_at = excluded.started_at
             """,
-            (d["draft_id"], int(d.get("season") or season), d.get("type"),
+            (d["draft_id"], draft_season, d.get("type"),
              (d.get("settings") or {}).get("rounds"), d.get("status"), from_millis(d.get("start_time"))),
         )
         drafts += 1
+        # Phase 9: whose slot each draft column originally was (a traded pick is made in the original team's slot).
+        # Sleeper's slot_to_roster_id when the draft has it, else draft_order (user_id -> slot).
+        by_slot = {}
+        for slot, rid in (d.get("slot_to_roster_id") or {}).items():
+            if rid is not None and rosters.get((draft_season, int(rid))):
+                by_slot[int(slot)] = (rosters[(draft_season, int(rid))], "slot_to_roster_id")
+        if not by_slot:
+            for uid, slot in (d.get("draft_order") or {}).items():
+                if slot is not None and by_user.get((draft_season, str(uid))):
+                    by_slot[int(slot)] = (by_user[(draft_season, str(uid))], "draft_order")
+        slot_rows += [(d["draft_id"], slot, code, source) for slot, (code, source) in by_slot.items()]
+
+    conn.execute("delete from core.draft_slot where draft_id in (select draft_id from core.draft where source = 'sleeper')")
+    with conn.cursor() as cur:
+        cur.executemany("insert into core.draft_slot (draft_id, draft_slot, franchise_code, source) "
+                        "values (%s, %s, %s, %s) on conflict do nothing", slot_rows)
 
     problems, total = [], 0
     for season, _, picks in latest(conn, "draft_picks"):
@@ -532,7 +558,7 @@ def load_drafts(conn):
             total += len(rows)
     if problems:
         raise LoadProblem("drafts", problems)
-    print(f"    {drafts} drafts, {total:,} picks")
+    print(f"    {drafts} drafts, {total:,} picks, {len(slot_rows)} draft slots with their original team")
 
 
 def load_transactions(conn):
@@ -833,8 +859,7 @@ STEP_NAMES = [name for name, _ in STEPS]
 
 SCHEMA_TIP = (
     "Your database is missing a table or column this code needs, usually because a newer schema file\n"
-    "hasn't been run yet. In DBeaver run, in this order: db/schema/004_player_names.sql, then\n"
-    "db/checks/001_validation.sql. Then run this command again."
+    "hasn't been run yet. Run `python -m etl.run_sql --all`, then run this command again."
 )
 
 

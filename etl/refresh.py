@@ -44,6 +44,9 @@ WARN_ONLY = {
     "best_lineup_below_actual": "a player's position looks off (affects the Lineups page only); ask Claude",
     "player_log_duplicates": "a player shows twice in a week on the Player / Box score pages; ask Claude",
     "def_points_accuracy_low": "rebuilt defense points stopped matching Sleeper (DEF weather splits only); ask Claude",
+    "trade_vs_acquisitions": "a traded player's points differ between two views (Trade Analyzer only); ask Claude",
+    "traded_pick_unmatched": "a traded pick couldn't be tied to the player drafted with it (Trade Analyzer only); ask Claude",
+    "replacement_level_mismatch": "trade and draft replacement levels disagree (Trade Analyzer only); ask Claude",
 }
 # Known, accepted counts. custom_points_used = 2: the 2022 Fantasy Bowl (co-champions).
 EXPECTED = {"custom_points_used": 2}

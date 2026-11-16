@@ -49,7 +49,9 @@ pages = st.navigation(
         "Getting better": [
             st.Page("views/lineups.py", title="Lineups", icon=":material/event_seat:"),
             st.Page("views/luck.py", title="Luck", icon=":material/casino:"),
-            st.Page("views/transactions.py", title="Trades & waivers", icon=":material/swap_horiz:"),
+            # url_path "trades": the address lib.trade_url() links to
+            st.Page("views/trades.py", title="Trade analyzer", icon=":material/swap_horiz:", url_path="trades"),
+            st.Page("views/transactions.py", title="Waivers & FAAB", icon=":material/person_add:"),
             st.Page("views/draft.py", title="Draft", icon=":material/format_list_bulleted:"),
             st.Page("views/positions.py", title="Positions", icon=":material/grid_view:"),
         ],

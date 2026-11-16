@@ -189,11 +189,22 @@ Pages, in two sidebar sections:
   record through `db/schema/008_app_views.sql`, the player game log in `db/schema/012_player_game_log.sql` and the
   weather splits in `db/schema/013_weather_splits.sql`.
 - **Getting better:** Lineups (points left on the bench vs the best possible lineup, wrong start/sit calls,
-  starters listed Out or Doubtful), Luck (actual record vs all-play record, starters' points over expected), Trades & waivers (what each side got, best pickups, FAAB),
+  starters listed Out or Doubtful), Luck (actual record vs all-play record, starters' points over expected),
+  Trade analyzer (Phase 9: every trade valued over time, who won, report cards, trade partners, timeline),
+  Waivers & FAAB (best pickups, FAAB spending),
   Draft (each pick vs a replacement-level player at his position, compared with its round), Positions
   (starters' points per week by position vs the league average, plus weather by position). These read
   `db/schema/009_insight_views.sql` (weather: `013_weather_splits.sql`; injuries, expected points and DEF
-  rebuild: `014_nfl_extras.sql`).
+  rebuild: `014_nfl_extras.sql`; trades: `015_trade_analyzer.sql`).
+
+**How the Trade analyzer judges a trade** (`db/schema/015_trade_analyzer.sql`): each team is credited with what it
+received, as points over a replacement-level starter at the same position (the Draft page's levels) in the weeks it
+started those players, regular season and playoff games in one total, for as long as each player stayed on that
+roster (kept seasons included). A traded pick counts as the player drafted with it (only for the trade that last
+moved the pick). FAAB is listed but not counted. Net = value received minus value given; won/lost = at least 1 point
+either way. Useful in DBeaver: `core.v_trade` (one row per trade), `core.v_trade_side` (per team),
+`core.v_trade_asset_value` (per player/pick), `core.v_traded_pick` (every traded pick and who was drafted with it).
+Checks (warn only): `qa.trade_vs_acquisitions`, `qa.traded_pick_unmatched`, `qa.replacement_level_mismatch`.
 
 Every view also works in DBeaver, e.g. `select * from core.v_lineup_week` or `core.v_draft_value`.
 Results are cached for 10 minutes, so new data shows up within that. To see it right away, open the app's

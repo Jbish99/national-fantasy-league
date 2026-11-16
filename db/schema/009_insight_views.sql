@@ -210,8 +210,9 @@ comment on view core.v_acquisitions is
 -- same round (a round of only keepers compares its keepers with each other).
 -- Defenses and the 2020 (ESPN) draft have no rebuilt points, so they get no value.
 -- ---------------------------------------------------------------------
-drop view if exists core.v_draft_value;   -- columns changed; nothing depends on this view
-create view core.v_draft_value as
+-- create OR REPLACE (not drop + create): qa.replacement_level_mismatch (Phase 9) depends on this view,
+-- so a drop would fail on every re-run. To change its columns later, drop that qa view first.
+create or replace view core.v_draft_value as
 with picks as (
     select dp.draft_id, dp.season, dp.round, dp.pick_no, dp.pick_no_is_estimated, dp.franchise_code,
            dp.player_id, coalesce(dp.player_name_as_entered, p.full_name) as player_name, p.position,

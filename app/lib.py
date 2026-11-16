@@ -402,11 +402,14 @@ def stat_strip(items):
     return f'<section class="card strip">{cells}</section>'
 
 
-def hero(left, right, label="", sublabel="", note_left="", note_right="", winner="auto", href=None, extra=""):
+def hero(left, right, label="", sublabel="", note_left="", note_right="", winner="auto", href=None, extra="",
+         status="Final", margin_text=None, link_label="Box score"):
     """The big matchup card: helmets face each other, each team's color glows in from its side.
     left / right: dict(code, score, season, record, label). winner: 'auto' (higher score), 'l', 'r' or None
-    (no winner, e.g. the 2022 co-champions). href: adds a 'Box score' link (e.g. box_url(game_id)).
-    extra: more chips for the top row (e.g. chip('Provisional', 'plain'))."""
+    (no winner, e.g. the 2022 co-champions). href: adds a link (link_label, default 'Box score'; e.g. box_url(game_id)).
+    extra: more chips for the top row (e.g. chip('Provisional', 'plain')).
+    status: the word between the scores ('Final'; the Trade Analyzer uses 'So far'). margin_text: replaces
+    'by 12.30' / 'No winner' (e.g. 'Even')."""
     lp, rp = team_colors(left["code"])[0], team_colors(right["code"])[0]
     bg = (f"background: radial-gradient(ellipse 46% 120% at 0% 55%, {rgba(lp, .85)} 0%, {rgba(lp, 0)} 100%), "
           f"radial-gradient(ellipse 46% 120% at 100% 55%, {rgba(rp, .85)} 0%, {rgba(rp, 0)} 100%), #121A29")
@@ -416,6 +419,8 @@ def hero(left, right, label="", sublabel="", note_left="", note_right="", winner
         winner = None if not known or ls == rs else ("l" if ls > rs else "r")
     marker = {"l": '<span class="tri-l"></span>', "r": '<span class="tri-r"></span>'}.get(winner, "")
     margin = f"by {abs(ls - rs):.2f}" if known and winner else ("No winner" if known else "")
+    if margin_text is not None:
+        margin = margin_text
 
     def side(t, where):
         facing = "right" if where == "l" else "left"
@@ -437,11 +442,11 @@ def hero(left, right, label="", sublabel="", note_left="", note_right="", winner
 
     meta = (chip(label) if label else "") + extra + (f'<span class="muted small">{esc(sublabel)}</span>' if sublabel else "")
     if href:
-        meta += f'<a class="lnk hero-link" href="{esc(href)}">Box score</a>'
+        meta += f'<a class="lnk hero-link" href="{esc(href)}">{esc(link_label)}</a>'
     return (f'<section class="hero" aria-label="{esc(full_name(left["code"]))} {esc(pts(ls))}, '
             f'{esc(full_name(right["code"]))} {esc(pts(rs))}"><div class="hero-in" style="{bg}">'
             f'<div class="hero-meta">{meta}</div><div class="hero-grid">{side(left, "l")}'
-            f'<div class="scores">{score(ls, "l")}<div class="mid">{marker}<span>Final</span>'
+            f'<div class="scores">{score(ls, "l")}<div class="mid">{marker}<span>{esc(status)}</span>'
             f'<span>{esc(margin)}</span></div>{score(rs, "r")}</div>{side(right, "r")}</div>'
             f'<div class="hero-names"><div class="tm l">{name_block(left, "l")}</div>'
             f'<div class="tm r">{name_block(right, "r")}</div></div></div></section>')
@@ -486,6 +491,11 @@ def player_url(player_id):
 
 def box_url(game_id):
     return "boxscore?" + urlencode({"game": game_id})
+
+
+def trade_url(transaction_id):
+    """The Trade Analyzer's page for one trade (Phase 9)."""
+    return "trades?" + urlencode({"trade": transaction_id})
 
 
 def link(url, label_html):
@@ -772,6 +782,21 @@ tr.cut td {{ padding: 0 !important; border-bottom: 0 !important; }}
 .trade-side ul {{ margin: 8px 0 0; padding-left: 18px; color: #D5DBE6; font-size: 14px; }}
 .trade-side li {{ margin: 2px 0; }}
 .trade-foot {{ margin-top: 10px; font-size: 13px; color: {TEXT_SECONDARY}; }}
+/* trade analyzer (Phase 9) */
+.trade-head .th-l {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+.trade-head .th-r {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
+.trade-side.won {{ box-shadow: inset 3px 0 0 {ACCENT}; }}
+.ts-top {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }}
+.ts-val {{ display: flex; flex-direction: column; align-items: flex-end; line-height: 1; }}
+.ts-val b {{ font-weight: 800; font-variation-settings: 'wdth' 66; font-size: 24px; }}
+.ts-val span {{ color: {MUTED}; font-size: 11.5px; margin-top: 3px; }}
+ul.assets {{ list-style: none; margin: 8px 0 0; padding: 0; }}
+ul.assets li {{ display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: baseline;
+  padding: 5px 0; border-top: 1px solid #1E283C; font-size: 14px; color: #D5DBE6; }}
+ul.assets .a-main {{ min-width: 0; display: flex; flex-direction: column; gap: 2px; }}
+ul.assets .a-name {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+ul.assets .a-meta {{ color: {MUTED}; font-size: 12.5px; }}
+ul.assets .a-val {{ font-weight: 700; white-space: nowrap; }}
 /* links between pages (Phase 7a) */
 .stApp a.lnk {{ color: inherit; text-decoration: none; border-bottom: 1px solid rgba(243,197,74,.35); }}
 .stApp a.lnk:hover {{ color: {ACCENT}; border-bottom-color: {ACCENT}; }}
@@ -863,6 +888,11 @@ a.tile-link:hover .tile {{ border-color: #4A5878; }}
   .series .s-r {{ flex-direction: column-reverse; justify-content: flex-end; }}
   .stat + .stat {{ border-left: 0; }}
   .banner {{ height: 170px; }}
+  .tight table.std th, .tight table.std td {{ padding-left: 6px; padding-right: 6px; }}
+  .tight table.std {{ font-size: 13px; }}
+  .tight .tc {{ gap: 6px; }}
+  .tight .tc .lg, .tight .tc .badge {{ width: 20px !important; height: 20px !important; }}
+  .tight .big-n {{ font-size: 15px; }}
   .ident {{ margin: -48px 0 0 14px; }}
   .ident-logo {{ width: 96px; height: 96px; }}
 }}

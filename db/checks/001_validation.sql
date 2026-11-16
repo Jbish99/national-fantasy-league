@@ -504,6 +504,58 @@ select * from qa.def_points_accuracy where compared >= 50 and exact_pct < 90;
 comment on view qa.def_points_accuracy_low is 'Seasons where rebuilt DEF points match Sleeper less than 90% of the time.';
 
 
+-- Phase 9 (trade analyzer). All three only affect the Trade Analyzer page, so the refresh just warns.
+-- A traded player's trade season must count exactly what core.v_acquisitions counts for that
+-- trade (same weeks, same points). Should be empty.
+create or replace view qa.trade_vs_acquisitions as
+with first_season as (
+    select asset_id, count(*) as weeks_rostered,
+           coalesce(sum(points), 0)                         as points_rostered,
+           coalesce(sum(points) filter (where is_starter), 0) as points_started
+    from core.v_trade_asset_week
+    where kept_seasons = 0
+    group by asset_id
+)
+select a.transaction_id, a.season, a.week, a.receiver_code, a.player_id,
+       acq.weeks_rostered as acquisitions_weeks,  coalesce(f.weeks_rostered, 0) as analyzer_weeks,
+       acq.points_started as acquisitions_points, coalesce(f.points_started, 0) as analyzer_points
+from core.v_trade_asset a
+join core.v_acquisitions acq on acq.transaction_id = a.transaction_id and acq.franchise_code = a.receiver_code
+                            and acq.player_id = a.player_id
+left join first_season f on f.asset_id = a.asset_id
+where a.asset_type = 'player'
+  and (acq.weeks_rostered <> coalesce(f.weeks_rostered, 0)
+       or acq.points_rostered <> coalesce(f.points_rostered, 0)
+       or acq.points_started <> coalesce(f.points_started, 0));
+
+comment on view qa.trade_vs_acquisitions is 'Traded players whose trade-season numbers differ from core.v_acquisitions.';
+
+
+-- Traded picks from drafts that already happened that couldn't be tied to the player drafted with them
+-- (no pick in that round + the original team's column, or the pick there was made by someone other
+-- than the pick's final owner, e.g. a keeper placed in a traded round). Should be empty.
+create or replace view qa.traded_pick_unmatched as
+select pick_season, pick_round, original_code, final_owner_code, draft_slot, slot_source,
+       pick_no, made_by_code, player_id, status
+from core.v_traded_pick
+where status in ('no_match', 'made_by_other');
+
+comment on view qa.traded_pick_unmatched is 'Traded picks the Trade Analyzer could not match to a drafted player.';
+
+
+-- The Trade Analyzer's replacement levels must equal the Draft page's. Should be empty.
+create or replace view qa.replacement_level_mismatch as
+select dv.season, dv.position, dv.replacement_rank as draft_rank, rl.replacement_rank as trade_rank,
+       dv.replacement_points as draft_points, rl.replacement_points as trade_points
+from (select distinct season, position, replacement_rank, replacement_points
+      from core.v_draft_value where replacement_points is not null) dv
+left join core.v_replacement_level rl on rl.season = dv.season and rl.position = dv.position
+where rl.replacement_points is distinct from dv.replacement_points
+   or rl.replacement_rank is distinct from dv.replacement_rank;
+
+comment on view qa.replacement_level_mismatch is 'Seasons/positions where the trade and draft replacement levels differ.';
+
+
 -- Not a problem list: our best-possible-lineup totals vs Sleeper's own "potential points"
 -- (rosters settings ppts), regular season, completed Sleeper seasons. A close match means
 -- the bench numbers on the Lineups page agree with Sleeper. Sleeper may treat injured-reserve
@@ -614,6 +666,9 @@ union all select 'league_defenses_without_stat_line',   count(*) from qa.league_
 union all select 'unknown_lineup_slots',                count(*) from qa.unknown_lineup_slots
 union all select 'best_lineup_below_actual',            count(*) from qa.best_lineup_below_actual
 union all select 'player_log_duplicates',               count(*) from qa.player_log_duplicates
-union all select 'def_points_accuracy_low',             count(*) from qa.def_points_accuracy_low;
+union all select 'def_points_accuracy_low',             count(*) from qa.def_points_accuracy_low
+union all select 'trade_vs_acquisitions',               count(*) from qa.trade_vs_acquisitions
+union all select 'traded_pick_unmatched',               count(*) from qa.traded_pick_unmatched
+union all select 'replacement_level_mismatch',          count(*) from qa.replacement_level_mismatch;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';
