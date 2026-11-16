@@ -218,6 +218,10 @@ for code, official in ((a, pa), (b, pb)):
            else "the official result was set by hand")
     notes.append(f"{full_name(code)}: official score {pts(official, season)} ({why}); "
                  f"its players add up to {pts(total)} in Sleeper.")
+if season == 2022 and week == 17:
+    notes.append("Bills and Bengals players: their game was cancelled after Damar Hamlin's injury. Sleeper kept "
+                 "the points from the part that was played, but the NFL's official stats have none, so they show "
+                 "'No stats recorded'.")
 if (slots["slot"] == "FLEX").any():
     empty_everywhere = query("select slot, season_slots, usable_slots from core.v_lineup_slots_week "
                              "where season = %s and week = %s and usable_slots < season_slots", (season, week))
