@@ -14,7 +14,8 @@ For every row of your sheet (xlsx or csv, the template's columns) it:
   2. trims empty transparent edges off helmets and logos, then shrinks it to web size
      (helmets/logos: longest side 512 px; end-zone banners: 1600 px wide),
   3. saves it as  app/static/league/<TEAM>/<type>_<first season>.png
-     (league-wide art: app/static/league/LEAGUE/<asset_id>.png),
+     (league-wide art: app/static/league/LEAGUE/<asset_id>.png). Banners with a solid background are saved
+     as .webp instead: same look, a fraction of the size (PNG is heavy for detailed artwork),
   4. cleans the colors: adds the #, puts back leading zeros Excel drops (55450 -> #055450) and reads a
      letter o/O as a zero (37o74e -> #37074E). Anything still not a 6-digit hex color is reported.
 Then it writes:
@@ -218,7 +219,7 @@ def main():
     look_in = Path(args.look_in.strip('"')) if args.look_in else None
     codes = known_franchises()
 
-    assets, seen = [], set()
+    assets, seen, big = [], set(), []
     for row in read_sheet(sheet):
         code = text(row.get("franchise_code")).upper()
         asset_type = text(row.get("asset_type")).lower()
@@ -252,11 +253,17 @@ def main():
         except Exception as error:                              # not an image, or unreadable
             problems.append(f"row {row['_row']}: couldn't open {source.name} as an image ({error})")
             continue
+        transparent = has_transparency(image)
+        if asset_type in BANNERS and not transparent:           # solid banner: WebP is far smaller than PNG
+            file_name = file_name[:-4] + ".webp"
         target = OUT_DIR / file_name
         target.parent.mkdir(parents=True, exist_ok=True)
-        image.save(target, optimize=True)
-        background = text(row.get("background")).lower() or ("transparent" if has_transparency(image) else "")
-        if background == "transparent" and not has_transparency(image):
+        if target.suffix == ".webp":
+            image.convert("RGB").save(target, "WEBP", quality=88, method=6)
+        else:
+            image.save(target, optimize=True)
+        background = text(row.get("background")).lower() or ("transparent" if transparent else "")
+        if background == "transparent" and not transparent:
             fixes.append(f"{asset_id}: marked transparent, but the image has a solid background")
         assets.append({"asset_id": asset_id, "franchise_code": code, "asset_type": asset_type,
                        "season_from": first, "season_to": last, "file_name": file_name, "background": background,
@@ -266,11 +273,11 @@ def main():
         size = target.stat().st_size
         print(f"  {file_name:34} {image.width:>4}x{image.height:<4} {size / 1000:7.0f} KB   from {source.name}")
         if size > BIG_FILE:
-            fixes.append(f"{file_name} is {size / 1e6:.1f} MB; fine, but a smaller export would load faster")
+            big.append(f"{file_name} ({size / 1e6:.1f} MB)")
 
     # keep the folder in step with the sheet: remove images that are no longer listed
     keep = {OUT_DIR / a["file_name"] for a in assets}
-    removed = [p for p in OUT_DIR.rglob("*.png") if p not in keep]
+    removed = [p for p in OUT_DIR.rglob("*") if p.suffix in (".png", ".webp") and p not in keep]
     for p in removed:
         p.unlink()
     with open(MANIFEST, "w", newline="", encoding="utf-8") as f:
@@ -284,6 +291,8 @@ def main():
           + (f" ({len(removed)} old one(s) removed)" if removed else "") + f"; list: {MANIFEST.relative_to(PROJECT_ROOT)}")
     if assets:
         print(f"Look them over: {PREVIEW.relative_to(PROJECT_ROOT)}")
+    if big:
+        fixes.append(f"{len(big)} file(s) over {BIG_FILE / 1e6:.1f} MB, fine but slower to load: " + ", ".join(big))
     if fixes:                                                   # dict.fromkeys = drop repeats, keep order
         print("\nFixed automatically (worth a glance):")
         print("\n".join(f"  - {f}" for f in dict.fromkeys(fixes)))
