@@ -6,11 +6,12 @@ and results against every opponent.
 
 import altair as alt
 import pandas as pd
+import psycopg
 import streamlit as st
 
 from lib import (CONTEXT_GRAY, SERIES_BLUE, TEXT_SECONDARY, art, badge, chip, esc, footer, full_name, game_label,
-                 html, html_table, ordinal, pts, query, record, section, show_chart, stat_strip, table, team,
-                 team_games, text)
+                 html, html_table, identity_evidence, identity_row, link, ordinal, pts, query, record, section,
+                 show_chart, stat_strip, table, team, team_games, text)
 
 alltime = query("select * from core.v_all_time_standings order by franchise")
 info_all = query("select franchise_code, home_city, founded_season, final_season from core.franchise").set_index("franchise_code")
@@ -73,6 +74,48 @@ for r in mine.sort_values("season", ascending=False).itertuples():
                  ordinal(r.regular_season_rank), finish])
 html(html_table([("Season", "l"), ("Team name", "l"), ("Record", "r"), ("Points for", "r"), ("Per game", "r"),
                  ("Reg. season", "r"), ("Finish", "l")], rows))
+
+# --- identity (Phase 10): all-time label + every season's style and build -----------------------
+try:
+    ids = query("select * from core.v_team_identity where franchise_code = %s order by season desc", (code,))
+    ids_all = query("select * from core.v_franchise_identity where franchise_code = %s", (code,))
+    labels_def = {r["identity_code"]: r for r in query("select * from core.identity").to_dict("records")}
+except psycopg.Error:
+    ids = None                     # 016 not applied yet (run `python -m etl.run_sql --all`)
+if ids is not None and not ids.empty:
+    section("Identity", "Style = how it scored, build = how the roster was put together (2021 on)")
+
+    def _why(code_, value, avg):
+        label = labels_def.get(code_)
+        if label is None:
+            return ""
+        if label["metric"] is None or pd.isna(label["metric"]):
+            return label["description"]
+        return identity_evidence(label, value, avg)
+
+    def _fallback(code_):
+        label = labels_def.get(code_)
+        return label is None or label["metric"] is None or pd.isna(label["metric"])
+
+    cards = []
+    if not ids_all.empty and ids_all["seasons"].iloc[0] >= 2:
+        a = ids_all.iloc[0]
+        cards.append(f'<div class="idcard"><div class="id-top"><strong>All-time</strong><span class="muted">'
+                     f'{int(a["seasons"])} seasons · {link("identities", "How labels work")}</span></div>'
+                     + identity_row("Style", a["style_name"], "", _fallback(a["style_code"]))
+                     + identity_row("Build", a["build_name"], "", _fallback(a["build_code"])) + "</div>")
+    for r in ids.itertuples():
+        note = "" if r.season_complete else "so far"
+        cards.append(f'<div class="idcard"><div class="id-top"><span class="yr">{r.season}</span>'
+                     f'<span class="muted">{note}</span></div>'
+                     + identity_row("Style", r.style_name, _why(r.style_code, r.style_value, r.style_league_avg),
+                                    _fallback(r.style_code))
+                     + identity_row("Build", r.build_name, _why(r.build_code, r.build_value, r.build_league_avg),
+                                    _fallback(r.build_code)) + "</div>")
+    html(f'<div class="idgrid">{"".join(cards[:3])}</div>')     # all-time + the 2 newest seasons: one row
+    if len(cards) > 3:
+        with st.expander("Earlier seasons"):
+            html(f'<div class="idgrid">{"".join(cards[3:])}</div>')
 
 left, right = st.columns(2, gap="large")
 # --- scoring trend vs the league ------------------------------------------------------------

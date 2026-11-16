@@ -54,6 +54,7 @@ pages = st.navigation(
             st.Page("views/transactions.py", title="Waivers & FAAB", icon=":material/person_add:"),
             st.Page("views/draft.py", title="Draft", icon=":material/format_list_bulleted:"),
             st.Page("views/positions.py", title="Positions", icon=":material/grid_view:"),
+            st.Page("views/identities.py", title="Team identities", icon=":material/fingerprint:", url_path="identities"),
         ],
     }
 )

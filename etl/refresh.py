@@ -47,6 +47,8 @@ WARN_ONLY = {
     "trade_vs_acquisitions": "a traded player's points differ between two views (Trade Analyzer only); ask Claude",
     "traded_pick_unmatched": "a traded pick couldn't be tied to the player drafted with it (Trade Analyzer only); ask Claude",
     "replacement_level_mismatch": "trade and draft replacement levels disagree (Trade Analyzer only); ask Claude",
+    "points_split_mismatch": "the passing/rushing/receiving split stopped adding up (Team identities only); ask Claude",
+    "identity_metric_unknown": "an identity label in db/seed/001 names a measure that doesn't exist (typo?); ask Claude",
 }
 # Known, accepted counts. custom_points_used = 2: the 2022 Fantasy Bowl (co-champions).
 EXPECTED = {"custom_points_used": 2}

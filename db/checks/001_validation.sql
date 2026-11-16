@@ -556,6 +556,48 @@ where rl.replacement_points is distinct from dv.replacement_points
 comment on view qa.replacement_level_mismatch is 'Seasons/positions where the trade and draft replacement levels differ.';
 
 
+-- Phase 10 (team identities). Both only affect the Team identities page, so the refresh just warns.
+-- The passing / rushing / receiving / kicking / other split must add up to the league points. Should be empty.
+create or replace view qa.points_split_mismatch as
+select sp.gsis_id, sp.season, sp.week, lp.league_points,
+       round(sp.passing_points + sp.rushing_points + sp.receiving_points + sp.kicking_points + sp.other_points, 2)
+           as split_total
+from core.v_nfl_points_split sp
+join core.v_nfl_league_points lp on lp.gsis_id = sp.gsis_id and lp.season = sp.season and lp.week = sp.week
+where round(sp.passing_points + sp.rushing_points + sp.receiving_points + sp.kicking_points + sp.other_points, 2)
+      <> lp.league_points;
+
+comment on view qa.points_split_mismatch is 'Stat lines whose points split doesn''t add up to the league points.';
+
+
+-- An identity label (db/seed/001) pointing at a measure core.v_team_metric doesn't have
+-- (a typo when editing the labels). Should be empty.
+create or replace view qa.identity_metric_unknown as
+select i.identity_code, i.name, i.metric
+from core.identity i
+where i.metric is not null
+  and not exists (select 1 from core.v_team_metric m where m.metric = i.metric)
+  and exists (select 1 from core.v_team_profile);
+
+comment on view qa.identity_metric_unknown is 'Identity labels whose metric doesn''t exist in core.v_team_metric.';
+
+
+-- Not a problem list: how much of each season's starting lineups the identity measures can see.
+create or replace view qa.identity_coverage as
+select season,
+       count(*)                                                              as teams,
+       round(avg(age_coverage) * 100, 1)                                     as pct_starts_with_birth_date,
+       count(*) filter (where avg_age is null)                               as teams_without_age,
+       round(avg(other_source_share) * 100, 1)                               as pct_points_unknown_or_other_source,
+       round(avg((air_points + ground_points) / nullif(starter_points, 0)) * 100, 1)
+                                                                             as pct_points_split_air_ground
+from core.v_team_profile
+group by season
+order by season;
+
+comment on view qa.identity_coverage is 'Info: birth-date coverage, unknown roster sources and stat-line coverage per season.';
+
+
 -- Not a problem list: our best-possible-lineup totals vs Sleeper's own "potential points"
 -- (rosters settings ppts), regular season, completed Sleeper seasons. A close match means
 -- the bench numbers on the Lineups page agree with Sleeper. Sleeper may treat injured-reserve
@@ -669,6 +711,8 @@ union all select 'player_log_duplicates',               count(*) from qa.player_
 union all select 'def_points_accuracy_low',             count(*) from qa.def_points_accuracy_low
 union all select 'trade_vs_acquisitions',               count(*) from qa.trade_vs_acquisitions
 union all select 'traded_pick_unmatched',               count(*) from qa.traded_pick_unmatched
-union all select 'replacement_level_mismatch',          count(*) from qa.replacement_level_mismatch;
+union all select 'replacement_level_mismatch',          count(*) from qa.replacement_level_mismatch
+union all select 'points_split_mismatch',               count(*) from qa.points_split_mismatch
+union all select 'identity_metric_unknown',             count(*) from qa.identity_metric_unknown;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';

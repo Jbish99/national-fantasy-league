@@ -498,6 +498,41 @@ def trade_url(transaction_id):
     return "trades?" + urlencode({"trade": transaction_id})
 
 
+# ---------------------------------------------------------------------------
+# Phase 10: team identities (labels live in core.identity, rows in db/seed/001)
+# ---------------------------------------------------------------------------
+def identity_value(value, value_format):
+    """A measure as the label's evidence sentence shows it: 62%, 25.1 years, 84.3."""
+    if value is None or pd.isna(value):
+        return ""
+    value = float(value)
+    if value_format == "pct":
+        return f"{value:.0%}"
+    if value_format == "pct_inverse":
+        return f"{1 - value:.0%}"
+    if value_format == "years":
+        return f"{value:.1f} years"
+    return f"{value:.1f}"
+
+
+def identity_evidence(label, value, league_avg):
+    """Fill a label's evidence sentence (core.identity.evidence), e.g. '68% of its offense through the air
+    (league 59%)'. label: a core.identity row (dict or namedtuple). '' when there's no sentence or no value."""
+    get = label.get if isinstance(label, dict) else lambda k, d=None: getattr(label, k, d)
+    template, fmt = get("evidence"), get("value_format")
+    if not template or value is None or pd.isna(value):
+        return ""
+    return template.format(value=identity_value(value, fmt), avg=identity_value(league_avg, fmt))
+
+
+def identity_row(kind, name, evidence="", fallback=False):
+    """One 'STYLE  Air-Raid / why' row for an identity card."""
+    cls = "id-name fb" if fallback else "id-name"
+    why = f'<div class="id-ev">{esc(evidence)}</div>' if evidence else ""
+    return (f'<div class="id-row"><span class="id-kind">{esc(kind)}</span><div><div class="{cls}">{esc(name)}</div>'
+            f'{why}</div></div>')
+
+
 def link(url, label_html):
     """A link inside st.html. label_html is already-built HTML (escape plain text with esc())."""
     return f'<a class="lnk" href="{esc(url)}">{label_html}</a>'
@@ -782,6 +817,20 @@ tr.cut td {{ padding: 0 !important; border-bottom: 0 !important; }}
 .trade-side ul {{ margin: 8px 0 0; padding-left: 18px; color: #D5DBE6; font-size: 14px; }}
 .trade-side li {{ margin: 2px 0; }}
 .trade-foot {{ margin-top: 10px; font-size: 13px; color: {TEXT_SECONDARY}; }}
+/* team identities (Phase 10) */
+.idgrid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }}
+.idcard {{ background: {CARD}; border: 1px solid #22304A; border-radius: 12px; padding: 14px 16px; }}
+.idcard .id-top {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }}
+.idcard .id-top .muted {{ font-size: 12.5px; white-space: nowrap; }}
+.idcard .tc, .idcard .tc span {{ white-space: normal; }}
+.id-row {{ display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 4px 0; }}
+.id-kind {{ font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: {MUTED}; }}
+.id-name {{ font-weight: 800; font-size: 20px; line-height: 1.1; font-variation-settings: 'wdth' 68; color: {ACCENT}; }}
+.id-name.fb {{ color: #C3CBD8; font-weight: 600; }}
+.id-ev {{ color: {MUTED}; font-size: 12.5px; margin-top: 2px; }}
+.id-hist {{ margin-top: 8px; border-top: 1px solid #1E283C; padding-top: 8px; font-size: 12.5px; color: #C3CBD8; }}
+.id-hist div {{ padding: 1px 0; }}
+.id-hist b {{ color: {TEXT}; font-weight: 700; }}
 /* trade analyzer (Phase 9) */
 .trade-head .th-l {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
 .trade-head .th-r {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}

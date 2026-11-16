@@ -2,7 +2,8 @@
 -- db/seed/001_reference_data.sql
 -- Hand-maintained reference data: franchises, seasons (and whose scores
 -- are official each year), keeper rules, the 2020 teams, which Sleeper
--- roster_id belongs to which franchise, and official-result overrides.
+-- roster_id belongs to which franchise, official-result overrides, and the
+-- team identity labels (Phase 10; rename them in the last section).
 --
 -- Safe to re-run: upserts on natural keys. Edit this file and re-run
 -- whenever the brand registry, rules or overrides change.
@@ -142,3 +143,81 @@ on conflict (game_id) do update set
     winner_code  = excluded.winner_code,
     scores_known = excluded.scores_known,
     reason       = excluded.reason;
+
+
+-- ---------------------------------------------------------------------
+-- Team identities (Phase 10, Jaden 2026-11-16). One style label (how a team
+-- scored) + one build label (how its roster was put together) per team-season.
+-- RENAME A LABEL HERE (name / description / evidence), then run
+-- `python -m etl.run_sql --all` (the daily refresh does it too).
+--   metric     the measure behind it (core.v_team_metric)
+--   direction  1 = a high value earns it, -1 = a low value
+--   min_z      how many standard deviations from that season's league average
+--              a team must be (1.0 = "clearly stands out"); the all-time label uses
+--              the average over a franchise's seasons, with its own bar (min_alltime_z,
+--              0.5 by default, set in db/schema/016)
+--   min_value  optional: the value must also reach this (Trade Shark / Waiver Wire
+--              Warrior: at least 10% of the starters' points from that source)
+--   evidence   the sentence on the page; {value} and {avg} are filled in using
+--              value_format (pct, pct_inverse = 1 - value, years, points)
+-- The row of each kind with no metric is the fallback when nothing stands out.
+-- To remove a label, delete its row in the database too (an upsert never deletes).
+-- ---------------------------------------------------------------------
+insert into core.identity (identity_code, name, kind, metric, direction, min_z, min_value, description, evidence, value_format, sort_order) values
+    ('air_raid',            'Air-Raid',            'style', 'ground_share',  -1, 1.0, null,
+        'More of its points came through the air (passing and catches) than the rest of the league.',
+        '{value} of its offense through the air (league {avg})', 'pct_inverse', 1),
+    ('ground_and_pound',    'Ground and Pound',    'style', 'ground_share',   1, 1.0, null,
+        'More of its points came on the ground than the rest of the league.',
+        '{value} of its offense on the ground (league {avg})', 'pct', 2),
+    ('gunslinger',          'Gunslinger',          'style', 'qb_share',       1, 1.0, null,
+        'Its quarterback carried more of the scoring than anyone else''s.',
+        'QB scored {value} of its points (league {avg})', 'pct', 3),
+    ('stars_and_scrubs',    'Stars & Scrubs',      'style', 'top2_share',     1, 1.0, null,
+        'Two stars scored a big share of the points.',
+        'Top 2 starters scored {value} of its points (league {avg})', 'pct', 4),
+    ('balanced_attack',     'Balanced Attack',     'style', 'top2_share',    -1, 1.0, null,
+        'Points came from all over the lineup, not from a couple of stars.',
+        'Top 2 starters scored just {value} of its points (league {avg})', 'pct', 5),
+    ('steady_eddie',        'Steady Eddie',        'style', 'score_cv',      -1, 1.0, null,
+        'The steadiest weekly scores in the league: you knew what you were getting.',
+        'Weekly scores swung ±{value} around its average (league ±{avg})', 'pct', 6),
+    ('boom_or_bust',        'Boom or Bust',        'style', 'score_cv',       1, 1.0, null,
+        'Huge weeks and duds: the widest swings in the league.',
+        'Weekly scores swung ±{value} around its average (league ±{avg})', 'pct', 7),
+    ('well_rounded',        'Well-Rounded',        'style', null,          null, 1.0, null,
+        'No one way of scoring stood out from the rest of the league.', null, null, 8),
+    ('draft_purist',        'Draft Purist',        'build', 'drafted_share',  1, 1.0, null,
+        'Won with players from that year''s draft.',
+        '{value} of its points from that year''s draft (league {avg})', 'pct', 11),
+    ('keeper_core',         'Keeper Core',         'build', 'kept_share',     1, 1.0, null,
+        'Its keepers did the heavy lifting.',
+        '{value} of its points from keepers (league {avg})', 'pct', 12),
+    ('trade_shark',         'Trade Shark',         'build', 'trade_share',    1, 1.0, 0.10,
+        'Built the lineup through trades.',
+        '{value} of its points from players it traded for (league {avg})', 'pct', 13),
+    ('waiver_wire_warrior', 'Waiver Wire Warrior', 'build', 'pickup_share',   1, 1.0, 0.10,
+        'Lived on the waiver wire and free agency.',
+        '{value} of its points from pickups (league {avg})', 'pct', 14),
+    ('youth_movement',      'Youth Movement',      'build', 'avg_age',       -1, 1.0, null,
+        'One of the youngest starting lineups in the league.',
+        'Starters averaged {value} old (league {avg})', 'years', 15),
+    ('old_guard',           'Old Guard',           'build', 'avg_age',        1, 1.0, null,
+        'Veterans everywhere in the starting lineup.',
+        'Starters averaged {value} old (league {avg})', 'years', 16),
+    ('deep_bench',          'Deep Bench',          'build', 'bench_ppw',      1, 1.0, null,
+        'Plenty of points sitting on the bench every week.',
+        '{value} bench points a week (league {avg})', 'points', 17),
+    ('mixed_build',         'Mixed Build',         'build', null,          null, 1.0, null,
+        'No one way of building the roster stood out from the rest of the league.', null, null, 18)
+on conflict (identity_code) do update set
+    name         = excluded.name,
+    kind         = excluded.kind,
+    metric       = excluded.metric,
+    direction    = excluded.direction,
+    min_z        = excluded.min_z,
+    min_value    = excluded.min_value,
+    description  = excluded.description,
+    evidence     = excluded.evidence,
+    value_format = excluded.value_format,
+    sort_order   = excluded.sort_order;
