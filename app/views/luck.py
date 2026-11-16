@@ -1,9 +1,11 @@
 """
 app/views/luck.py
-Luck: actual record vs the all-play record (every team vs every other team, every week).
+Luck: actual record vs the all-play record (every team vs every other team, every week), and (Phase 7b)
+starters' points over what their usage predicted.
 """
 
 import altair as alt
+import psycopg
 import streamlit as st
 
 from lib import (DIVERGING, MUTED, footer, full_name, html, html_table, page_header, query, record, section,
@@ -57,4 +59,55 @@ bars = alt.Chart(df).mark_bar(cornerRadiusEnd=4, height={"band": 0.7}).encode(
 rule = alt.Chart().mark_rule(color=MUTED, strokeWidth=1).encode(x=alt.datum(0))
 show_chart((bars + rule).properties(height=30 * len(df)))
 st.caption("Blue = luckier than the scores suggest; red = unluckier. Regular season only, official scores.")
+
+# --- usage luck: starters' points over expected (Phase 7b) ---------------------------------------
+section("Points over expected", "Did your starters make more of their touches than usage predicted?")
+try:
+    poe = query(
+        """
+        select pw.season, pw.week, pw.franchise_code,
+               sum(x.points_over_expected) as over_expected, sum(x.expected_points) as expected
+        from core.player_week pw
+        join core.season s on s.season = pw.season
+        join core.v_player_week_extras x on x.player_id = pw.player_id and x.season = pw.season and x.week = pw.week
+        where pw.is_starter and pw.week < s.playoff_week_start and x.expected_points is not null
+        group by pw.season, pw.week, pw.franchise_code
+        """)
+except psycopg.Error:
+    poe = None
+    st.caption("This section needs one database update: run `python -m etl.run_sql --all`, then reload.")
+if poe is not None:
+    if choice != "All seasons":
+        poe = poe[poe["season"] == choice]
+    if poe.empty:
+        st.caption("No expected-points data for this selection yet.")
+    else:
+        u = poe.groupby("franchise_code").agg(weeks=("week", "count"), over=("over_expected", "sum"),
+                                              expected=("expected", "sum")).reset_index()
+        u["per_week"] = u["over"] / u["weeks"]
+        u["expected_per_week"] = u["expected"] / u["weeks"]
+        u["franchise"] = u["franchise_code"].map(full_name)
+        u = u.sort_values("per_week", ascending=False)
+        html(html_table(
+            [("Team", "l"), ("Weeks", "r"), ("Expected pts / week", "r"), ("Over expected / week", "r"),
+             ("Over expected (total)", "r")],
+            [[team(r.franchise_code, art_season, name="full"), str(int(r.weeks)), f"{r.expected_per_week:.2f}",
+              luck_cell(r.per_week), f"{r.over:+,.1f}"] for r in u.itertuples()]))
+        lim = max(abs(u["per_week"]).max(), 1)
+        ubars = alt.Chart(u).mark_bar(cornerRadiusEnd=4, height={"band": 0.7}).encode(
+            x=alt.X("per_week:Q", title="Starters' points over expected per week", scale=alt.Scale(domain=[-lim, lim])),
+            y=alt.Y("franchise:N", sort="-x", title=None, axis=alt.Axis(labelLimit=200)),
+            color=alt.Color("per_week:Q", scale=alt.Scale(domain=[-lim, 0, lim],
+                                                          range=[DIVERGING[0], MUTED, DIVERGING[2]],
+                                                          interpolate="rgb"), legend=None),
+            tooltip=[alt.Tooltip("franchise:N", title="Team"),
+                     alt.Tooltip("per_week:Q", title="Over expected / week", format="+.2f"),
+                     alt.Tooltip("expected_per_week:Q", title="Expected / week", format=".2f")],
+        )
+        show_chart((ubars + rule).properties(height=30 * len(u)))
+        st.caption("Expected points: what average players would score with the touches your QB/RB/WR/TE starters "
+                   "got (where on the field and how often), from nflverse's usage model, scored with our league's "
+                   "rules (no fumbles, return TDs, kickers or defenses). Blue = your starters beat their usage (big "
+                   "plays, touchdowns); red = they fell short. Like all-play luck, it tends to even out. Regular "
+                   "season only.")
 footer()

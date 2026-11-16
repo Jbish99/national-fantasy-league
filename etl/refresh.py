@@ -7,7 +7,8 @@ Phase 6: the in-season refresh. One command runs the whole update, in order:
   3. python -m etl.load_workbook                    the All-In-One workbook in data/manual/
   4. python -m etl.load_core                        rebuild the clean tables; finished weeks the
                                                     workbook doesn't have yet come in as provisional
-  5. python -m etl.load_nflverse                    this season's NFL stats, games and weather
+  5. python -m etl.load_nflverse                    this season's NFL stats, games and weather, plus snaps,
+                                                    injuries, expected points and play-by-play summaries
   6. checks                                         the history checks in qa.summary must pass
 
 GitHub runs this every morning (.github/workflows/refresh.yml). You can also run it yourself
@@ -42,6 +43,7 @@ WARN_ONLY = {
     "unknown_lineup_slots": "a new lineup slot type (affects the Lineups page only); ask Claude",
     "best_lineup_below_actual": "a player's position looks off (affects the Lineups page only); ask Claude",
     "player_log_duplicates": "a player shows twice in a week on the Player / Box score pages; ask Claude",
+    "def_points_accuracy_low": "rebuilt defense points stopped matching Sleeper (DEF weather splits only); ask Claude",
 }
 # Known, accepted counts. custom_points_used = 2: the 2022 Fantasy Bowl (co-champions).
 EXPECTED = {"custom_points_used": 2}

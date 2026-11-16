@@ -92,11 +92,12 @@ if wx is not None and not wx.empty:
         x=wx_x, y=wx_y, text=alt.Text("vs_season_avg:Q", format="+.1f"),
         color=alt.condition(alt.datum.ink == BG, alt.value(BG), alt.value(TEXT)))
     show_chart((cells + cell_text).properties(height=56 * len(w_positions)))
-    st.caption("Players who were in a league starting lineup at least once that season, all their NFL "
-               "regular-season games that season (2021 on), scored with our league's rules. Each game is compared "
-               "with that player's average for the season, so star players and the full-to-half PPR switch don't "
-               "skew it. Cold = 40°F or colder, Windy = 15+ mph (a cold, windy game counts in both), Dome includes "
-               "closed roofs. Kickers start in 2026. Defenses come with the DEF points rebuild (Phase 7b).")
+    st.caption("Players and defenses that were in a league starting lineup at least once that season, all their "
+               "NFL regular-season games that season (2021 on), scored with our league's rules. Each game is "
+               "compared with that player's average for the season, so star players and the full-to-half PPR "
+               "switch don't skew it. Cold = 40°F or colder, Windy = 15+ mph (a cold, windy game counts in both), "
+               "Dome includes closed roofs. Kickers start in 2026. Defense points are rebuilt from play-by-play "
+               "with our DEF rules.")
     with st.expander("Show as a table"):
         body = []
         for pos in w_positions:

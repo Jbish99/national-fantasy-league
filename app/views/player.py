@@ -2,8 +2,8 @@
 app/views/player.py
 Phase 7a: one player's league history. Every week he was on a league roster (2021 on, from Sleeper):
 who had him, where he was in the lineup, what he scored for that team, and his real NFL stat line,
-opponent and weather. Plus his season totals, weather splits (all his NFL games from 2021 on) and every league
-move (draft, keeper, trades, pickups).
+opponent, weather, snap share and injury status. Plus his season totals, usage and expected points (7b),
+weather splits (all his NFL games from 2021 on; defenses too since 7b) and every league move.
 
 Open a player straight from a link: player?id=<Sleeper player id> (lib.player_url()).
 """
@@ -14,8 +14,8 @@ import psycopg
 import streamlit as st
 
 from lib import (SERIES_BLUE, SERIES_ORANGE, WEATHER, box_url, chip, city, conditions, esc, footer, full_name, html,
-                 html_table, link, logo, nfl_game_text, position_chip, pts, query, require, section, show_chart,
-                 signed, stat_cell, stat_strip, team, text)
+                 html_table, injury_tag, link, logo, nfl_game_text, position_chip, pts, query, require, section,
+                 show_chart, signed, snaps_text, stat_cell, stat_strip, team, text, week_extras)
 
 require("core.v_player_game_log")
 
@@ -58,6 +58,7 @@ st.query_params["id"] = pid
 me = players[players["player_id"] == pid].iloc[0]
 
 log = query("select * from core.v_player_game_log where player_id = %s order by season, week", (pid,))
+extras = week_extras("player_id = %s", (pid,))
 
 # --- header: name, position, who had him ---------------------------------------------------------
 stints = []                                                         # consecutive weeks with one team
@@ -96,31 +97,83 @@ for season, s in log.groupby("season", sort=False):
 html(html_table([("Season", "l"), ("Team", "l"), ("Weeks", "r"), ("Started", "r"), ("All points", "r"),
                  ("As a starter", "r"), ("Per start", "r"), ("Best week", "r")], rows[::-1]))
 
-# --- weather splits ----------------------------------------------------------------------------
-section("By conditions", "All his NFL regular-season games from 2021 on, on a league roster or not")
-if me["position"] == "DEF":
-    st.caption("Defenses get weather splits once their fantasy points are rebuilt from play-by-play (Phase 7b).")
-else:
+# --- usage and expected points ------------------------------------------------------------------
+if me["position"] in ("QB", "RB", "WR", "TE"):
+    section("Usage and expected points", "All his NFL regular-season games from 2021 on, our scoring")
     try:
+        use = query(
+            """
+            select e.season, count(*) as games, avg(s.offense_pct) as snap_share,
+                   avg(e.pass_attempt) as pass_att, avg(e.targets) as targets, avg(e.carries) as carries,
+                   avg(coalesce(u.targets_rz, 0) + coalesce(u.carries_rz, 0)) as rz_looks,
+                   avg(e.expected_points) as expected, avg(e.actual_points) as actual
+            from core.v_expected_league_points e
+            join core.player_xref x on x.gsis_id = e.gsis_id
+            left join core.nfl_snap_week s on s.gsis_id = e.gsis_id and s.season = e.season and s.week = e.week
+            left join core.nfl_usage_week u on u.gsis_id = e.gsis_id and u.season = e.season and u.week = e.week
+            where x.player_id = %s
+            group by e.season
+            order by e.season desc
+            """, (pid,))
+    except psycopg.Error:
+        use = None
+        st.caption("Usage needs one database update: run `python -m etl.run_sql --all`, then reload.")
+    if use is not None and use.empty:
+        st.caption("No usage data on file for him from 2021 on.")
+    elif use is not None:
+        volume = ("pass_att", "Pass att / g") if me["position"] == "QB" else ("targets", "Targets / g")
+        body = [[f'<span class="yr">{int(r.season)}</span>', str(int(r.games)),
+                 f"{r.snap_share * 100:.0f}%" if pd.notna(r.snap_share) else "-",
+                 f"{getattr(r, volume[0]):.1f}", f"{r.carries:.1f}", f"{r.rz_looks:.1f}",
+                 f"{r.expected:.2f}", f'<span class="big-n">{r.actual:.2f}</span>', signed(r.actual - r.expected)]
+                for r in use.itertuples()]
+        html(html_table([("Season", "l"), ("Games", "r"), ("Snap share", "r"), (volume[1], "r"), ("Carries / g", "r"),
+                         ("Red-zone looks / g", "r"), ("Expected pts / g", "r"), ("Actual pts / g", "r"),
+                         ("Over expected / g", "r")], body))
+        st.caption("Expected points: what an average player would score with his touches (where on the field and "
+                   "how often he got the ball), from nflverse's usage model, scored with our league's rules. Actual "
+                   "points here use the same scoring parts (no fumbles, return TDs), so they can differ a little from "
+                   "Sleeper's. Above zero = he made more of his chances than usual (big plays, TDs); that tends to "
+                   "even out over time. Red-zone looks = targets + carries inside the 20.")
+
+# --- weather splits ----------------------------------------------------------------------------
+
+
+def conditions_table(wx, whose):
+    body = []
+    for label, flag, _, meaning in WEATHER:
+        games = wx[wx[flag].fillna(False).astype(bool)]
+        body.append([f'{esc(label)}<div class="muted small">{esc(meaning)}</div>', str(len(games)),
+                     f'<span class="big-n">{games["league_points"].mean():.2f}</span>' if len(games) else "-",
+                     signed(games["vs_season_avg"].mean()) if len(games) else "-"])
+    body.append(['<b>All games</b>', str(len(wx)), f'<span class="big-n">{wx["league_points"].mean():.2f}</span>',
+                 '<span class="muted">0.00</span>'])
+    html(html_table([("Conditions", "l"), ("Games", "r"), ("Points per game", "r"),
+                     (f"vs {whose} season average", "r")], body))
+
+
+is_def = me["position"] == "DEF"
+section("By conditions", ("All its" if is_def else "All his") + " NFL regular-season games from 2021 on, "
+        "on a league roster or not")
+try:
+    if is_def:
+        wx = query("select * from core.v_def_week_conditions where sleeper_def_id = %s", (pid,))
+    else:
         wx = query("""select w.* from core.v_player_week_conditions w
                       join core.player_xref x on x.gsis_id = w.gsis_id
                       where x.player_id = %s""", (pid,))
-    except psycopg.Error:
-        wx = None
-        st.caption("Weather splits need one database update: run `python -m etl.run_sql --all`, then reload.")
-    if wx is not None and wx.empty:
-        st.caption("No NFL stat lines on file for him from 2021 on.")
-    elif wx is not None:
-        body = []
-        for label, flag, _, meaning in WEATHER:
-            games = wx[wx[flag].fillna(False).astype(bool)]
-            body.append([f'{esc(label)}<div class="muted small">{esc(meaning)}</div>', str(len(games)),
-                         f'<span class="big-n">{games["league_points"].mean():.2f}</span>' if len(games) else "-",
-                         signed(games["vs_season_avg"].mean()) if len(games) else "-"])
-        body.append(['<b>All games</b>', str(len(wx)), f'<span class="big-n">{wx["league_points"].mean():.2f}</span>',
-                     '<span class="muted">0.00</span>'])
-        html(html_table([("Conditions", "l"), ("Games", "r"), ("Points per game", "r"),
-                         ("vs his season average", "r")], body))
+except psycopg.Error:
+    wx = None
+    st.caption("Weather splits need one database update: run `python -m etl.run_sql --all`, then reload.")
+if wx is not None and wx.empty:
+    st.caption("No NFL games on file from 2021 on.")
+elif wx is not None:
+    conditions_table(wx, "its" if is_def else "his")
+    if is_def:
+        st.caption("Defense points are rebuilt from play-by-play with our league's DEF rules for that season (they "
+                   "matched Sleeper's exactly on 28 of 29 real 2025 defense-weeks we checked). 'vs its season "
+                   "average' compares each game with its average that season. A cold, windy game counts in both rows.")
+    else:
         st.caption("Points are rebuilt from each stat line with our league's rules for that season (they equal "
                    "Sleeper's for about 99% of player-weeks). 'vs his season average' compares each game with his "
                    "average that season, so a role change or the switch from full to half PPR doesn't skew it. "
@@ -157,19 +210,22 @@ for r in weeks.sort_values(["season", "week"], ascending=False).to_dict("records
     else:
         game = "No league game"
     nfl = f'{r["nfl_team"]} {nfl_game_text(r)}' if isinstance(r["nfl_team"], str) else ""
-    meta = " · ".join(x for x in (nfl, conditions(r)) if x)
+    x = extras.get((pid, r["season"], r["week"]), {})
+    meta = " · ".join(v for v in (nfl, conditions(r), snaps_text(x.get("offense_pct"))) if v)
+    tag = injury_tag(x.get("injury_status"), x.get("injury"))
     rows.append(f'<div class="grow"><div class="gwk">{when_html}<span class="pm">{esc(game)}</span></div>'
                 f'<div title="{esc(full_name(r["franchise_code"]))}">{logo(r["franchise_code"], r["season"], 26)}</div>'
-                f'<div class="gmain"><span class="pm">{esc(meta)}</span><span class="ps">{stat_cell(r)}</span></div>'
+                f'<div class="gmain"><span class="pm">{esc(meta)}</span><span class="ps">{tag}{stat_cell(r)}</span></div>'
                 f'<div class="bslot">{position_chip(r["lineup_slot"])}</div>'
                 f'<div class="bpts{"" if r["is_starter"] else " lo"}">{pts(r["league_points"])}</div></div>')
 head = ('<div class="grow head"><div>Week</div><div></div><div>NFL game · stat line</div><div>Slot</div>'
         '<div class="r">Points</div></div>')
 html(f'<section class="card glog" aria-label="Week by week">{head}{"".join(rows)}</section>')
-st.caption("Week links open that league game's box score. Team = the league team that had him. Points are Sleeper's, under that season's scoring "
-           "(2021-22 full PPR; 2023 on half PPR plus first-down and TE bonuses). Stat lines and weather come from "
-           "nflverse; 'No stats recorded' = he didn't play, or played without an offensive stat. PA = points the "
-           "defense's NFL opponent scored.")
+st.caption("Week links open that league game's box score. Team = the league team that had him. Points are "
+           "Sleeper's, under that season's scoring (2021-22 full PPR; 2023 on half PPR plus first-down and TE "
+           "bonuses). Stat lines, weather and snap share come from nflverse; 'No stats recorded' = he didn't play, or "
+           "played without an offensive stat. O / D / Q = listed Out, Doubtful or Questionable on that week's NFL "
+           "injury report (hover for the injury). PA = points the defense's NFL opponent scored.")
 
 # --- league moves --------------------------------------------------------------------------------
 moves = query(

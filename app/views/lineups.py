@@ -1,14 +1,16 @@
 """
 app/views/lineups.py
-Start/sit: points left on the bench compared with the best possible lineup.
+Start/sit: points left on the bench compared with the best possible lineup, and (Phase 7b) starters who
+were listed Out or Doubtful on the NFL injury report.
 """
 
 import altair as alt
 import pandas as pd
+import psycopg
 import streamlit as st
 
-from lib import (SERIES_BLUE, chip, city, esc, footer, full_name, html, html_table, page_header, position_chip, pts,
-                 query, section, show_chart, team)
+from lib import (SERIES_BLUE, box_url, chip, city, esc, footer, full_name, html, html_table, injury_tag, link,
+                 page_header, player_url, position_chip, pts, query, section, show_chart, team, team_games)
 
 page_header("Lineups", "How close each team's starting lineup came to the best possible lineup that week, using "
                        "the players on its roster. Lineup % = points scored / best possible points.")
@@ -99,4 +101,47 @@ html(html_table([("Player", "l"), ("Pos", "l"), ("Points", "r"), ("Team", "l"), 
                 [[f"<strong>{esc(r.full_name)}</strong>", position_chip(r.position),
                   f'<span class="big-n">{r.points:.2f}</span>', team(r.franchise_code, r.season), str(r.season),
                   str(int(r.week))] for r in bench.itertuples()]))
+
+# --- starters who were on the injury report as Out or Doubtful (Phase 7b) ------------------------
+section("Started while listed Out or Doubtful", "From that week's NFL injury report")
+try:
+    out = query("select * from core.v_started_while_out")
+except psycopg.Error:
+    out = None
+    st.caption("This list needs one database update: run `python -m etl.run_sql --all`, then reload.")
+if out is not None:
+    if choice != "All seasons":
+        out = out[out["season"] == choice]
+    if part == "Regular season":
+        out = out[out["is_regular_season"]]
+    if out.empty:
+        st.caption("Nobody started a player listed Out or Doubtful here.")
+    else:
+        games = team_games()[["season", "week", "franchise_code", "game_id"]]
+        out = out.merge(games, on=["season", "week", "franchise_code"], how="left") \
+                 .sort_values(["season", "week"], ascending=False)
+        counts = out[out["injury_status"] == "Out"].groupby("franchise_code").size().sort_values(ascending=False)
+        most = ""
+        if len(counts):
+            most = " Most starts of a player listed Out: " + ", ".join(
+                f"{full_name(code)} {n}" for code, n in counts.head(3).items()) + "."
+        st.caption(f"{len(out)} starts, newest first.{most}")
+        body = []
+        for r in out.itertuples():
+            when = f"{r.season}, week {int(r.week)}"
+            body.append([
+                f'<span class="tc">{position_chip(r.position)}{link(player_url(r.player_id), esc(r.player_name))}</span>',
+                f'{injury_tag(r.injury_status, r.injury)}{esc(r.injury_status)}'
+                + (f' <span class="muted small">({esc(r.injury)})</span>' if isinstance(r.injury, str) else ""),
+                f'<span class="big-n">{r.points:.2f}</span>', team(r.franchise_code, r.season),
+                '<span class="muted" style="white-space:nowrap">'
+                + (link(box_url(r.game_id), esc(when)) if isinstance(r.game_id, str) else esc(when)) + "</span>"])
+        cols = [("Player", "l"), ("Injury report", "l"), ("Points", "r"), ("Team", "l"), ("When", "l")]
+        SHOW = 25
+        html(html_table(cols, body[:SHOW], compact=True))
+        if len(body) > SHOW:
+            with st.expander(f"Show the other {len(body) - SHOW} (oldest last)"):
+                html(html_table(cols, body[SHOW:], compact=True))
+        st.caption("Doubtful players sometimes play (their points show here). Players on injured reserve aren't on "
+                   "the weekly report, so they don't show up in this list.")
 footer()

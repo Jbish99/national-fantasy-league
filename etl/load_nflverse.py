@@ -2,7 +2,8 @@
 etl/load_nflverse.py
 
 Phase 3: real NFL stat lines, NFL games (results + weather) and the Sleeper -> NFL id link,
-from nflverse (free, no key) via the nflreadpy package.
+from nflverse (free, no key) via the nflreadpy package. Phase 7b added snaps, injuries, expected
+points and play-by-play summaries.
 
 Steps, in order (each one is its own transaction):
   download  save nflverse files to data/cache/nflverse/ (the raw layer for this source)
@@ -15,6 +16,15 @@ Steps, in order (each one is its own transaction):
             plus anyone who was ever on a league roster
   teams     core.nfl_team_week: each NFL team's weekly defense / special-teams stat line
             (the real stat line behind Sleeper's DEF players)
+  snaps        core.nfl_snap_week: offensive / special-teams snaps per player-week (Phase 7b)
+  injuries     core.nfl_injury_week: the weekly NFL injury report (Out / Doubtful / Questionable)
+  opportunity  core.nfl_opportunity_week: expected stats from usage (nflverse ff_opportunity)
+  pbp          play-by-play -> core.nfl_usage_week, core.nfl_team_offense_week, core.nfl_def_week
+               (the raw plays, ~13 MB a season, stay in data/cache/nflverse/; see etl/pbp_aggregates.py)
+Regular season only for the Phase 7b data. If one of those files can't be downloaded (e.g. nflverse
+hasn't published a brand-new season yet), the loader says so and carries on with the rest.
+The daily run rebuilds only the current season of the Phase 7b tables (finished seasons don't change);
+--refresh or --step rebuilds every season.
 
 How a Sleeper player gets an NFL id (core.player_xref.method):
   crosswalk      nflverse's ID crosswalk (covers ~99% of league players)
@@ -31,6 +41,7 @@ Run from the project root:
     python -m etl.load_nflverse --refresh        # re-download every file, then load
     python -m etl.load_nflverse --no-download    # rebuild from the saved files only
     python -m etl.load_nflverse --step teams     # one step (repeatable; download still runs first)
+    python -m etl.load_nflverse --step pbp --step snaps
 Then check:  select * from qa.summary;
 """
 
@@ -54,15 +65,17 @@ except ImportError:
 from etl.common import LoadProblem
 from etl.db import PROJECT_ROOT, get_connection
 from etl.match_players import normalize
-from etl.nfl_columns import CONTEXT_COLUMNS, GAME_COLUMNS, SLEEPER_DEF_IDS, STAT_COLUMNS, TEAM_DEFENSE_COLUMNS
+from etl.nfl_columns import (CONTEXT_COLUMNS, GAME_COLUMNS, OPPORTUNITY_COLUMNS, SLEEPER_DEF_IDS, STAT_COLUMNS,
+                             TEAM_DEFENSE_COLUMNS)
+from etl.pbp_aggregates import PBP_COLUMNS, defense_events, player_usage, regular_season, team_offense
 
 CACHE = PROJECT_ROOT / "data" / "cache" / "nflverse"
 OVERRIDES = PROJECT_ROOT / "data" / "manual" / "nfl_id_overrides.csv"
 KEEP_POSITIONS = {"QB", "RB", "WR", "TE", "K", "FB"}
 FANTASY_POSITIONS = {"QB", "RB", "WR", "TE", "K"}
 SCHEMA_TIP = (
-    "Your database is missing a table this code needs. In DBeaver run db/schema/005_nfl_stats.sql,\n"
-    "then db/checks/001_validation.sql, then run this command again."
+    "Your database is missing a table this code needs. Run:  python -m etl.run_sql --all\n"
+    "then run this command again."
 )
 
 
@@ -78,14 +91,21 @@ def season_range(conn):
 
 
 def file_plan(seasons):
-    """(dataset, season, file name, how to fetch it). season None = one file for all seasons."""
-    plan = [("ff_playerids", None, "ff_playerids.parquet", lambda: nfl.load_ff_playerids()),
-            ("schedules", None, "schedules.parquet", lambda: nfl.load_schedules(seasons))]
+    """(dataset, season, file name, how to fetch it, optional). season None = one file for all seasons.
+    optional = a failed download only prints a note (Phase 7b extras), instead of stopping the load."""
+    plan = [("ff_playerids", None, "ff_playerids.parquet", lambda: nfl.load_ff_playerids(), False),
+            ("schedules", None, "schedules.parquet", lambda: nfl.load_schedules(seasons), False),
+            ("players", None, "players.parquet", lambda: nfl.load_players(), True)]
     for s in seasons:
         plan.append(("player_stats", s, f"player_stats_{s}.parquet",
-                     lambda s=s: nfl.load_player_stats([s], summary_level="week")))
+                     lambda s=s: nfl.load_player_stats([s], summary_level="week"), False))
         plan.append(("team_stats", s, f"team_stats_{s}.parquet",
-                     lambda s=s: nfl.load_team_stats([s], summary_level="week")))
+                     lambda s=s: nfl.load_team_stats([s], summary_level="week"), False))
+        plan.append(("snap_counts", s, f"snap_counts_{s}.parquet", lambda s=s: nfl.load_snap_counts([s]), True))
+        plan.append(("injuries", s, f"injuries_{s}.parquet", lambda s=s: nfl.load_injuries([s]), True))
+        plan.append(("ff_opportunity", s, f"ff_opportunity_{s}.parquet",
+                     lambda s=s: nfl.load_ff_opportunity([s], stat_type="weekly"), True))
+        plan.append(("pbp", s, f"pbp_{s}.parquet", lambda s=s: nfl.load_pbp([s]), True))
     return plan
 
 
@@ -94,10 +114,10 @@ def download(conn, mode):
     seasons, current = season_range(conn)
     CACHE.mkdir(parents=True, exist_ok=True)
     problems = []
-    for dataset, season, name, fetch in file_plan(seasons):
+    for dataset, season, name, fetch, optional in file_plan(seasons):
         path = CACHE / name
         if mode == "none":
-            if not path.exists():
+            if not path.exists() and not optional:
                 problems.append(f"{name} isn't saved in data/cache/nflverse yet; run without --no-download")
             continue
         if mode == "auto" and path.exists() and season is not None and season != current:
@@ -107,6 +127,9 @@ def download(conn, mode):
         except Exception as error:                     # network hiccup: fall back to the saved copy if any
             if path.exists():
                 print(f"    note: couldn't re-download {name} ({type(error).__name__}); using the saved copy")
+                continue
+            if optional:
+                print(f"    note: couldn't download {name} ({type(error).__name__}); skipped for now")
                 continue
             problems.append(f"couldn't download {name}: {type(error).__name__}: {error}")
             continue
@@ -131,6 +154,27 @@ def read(name):
     if not path.exists():
         raise LoadProblem("load", [f"{name} isn't saved in data/cache/nflverse. Run without --no-download."])
     return pl.read_parquet(path)
+
+
+def read_if_saved(name, columns=None):
+    """A Phase 7b file, or None (with a note) when it isn't saved yet."""
+    path = CACHE / name
+    if not path.exists():
+        print(f"    note: {name} isn't saved yet; skipped")
+        return None
+    if columns:
+        available = set(pl.read_parquet_schema(path))
+        return pl.read_parquet(path, columns=[c for c in columns if c in available])
+    return pl.read_parquet(path)
+
+
+def regular_games(season):
+    """Played regular-season games of one season from the saved schedule."""
+    games = read("schedules.parquet")
+    return games.filter((pl.col("season") == season) & (pl.col("game_type") == "REG")
+                        & pl.col("home_score").is_not_null()).select(
+        "game_id", pl.col("week").cast(pl.Int64), "home_team", "away_team",
+        pl.col("home_score").cast(pl.Int64), pl.col("away_score").cast(pl.Int64))
 
 
 def all_stats(conn, columns=None):
@@ -416,7 +460,159 @@ def load_teams(conn):
     print(f"    {total:,} team-weeks for {seasons[0]}-{seasons[-1]}; {linked} Sleeper defenses linked")
 
 
-STEPS = [("xref", load_xref), ("games", load_games), ("stats", load_stats), ("teams", load_teams)]
+# ---------------------------------------------------------------------------
+# Phase 7b steps: snaps, injuries, expected points, play-by-play summaries
+# ---------------------------------------------------------------------------
+
+RELOAD_ALL = False   # set by --refresh or --step: rebuild every season of the Phase 7b tables
+
+
+def seasons_to_load(conn, table):
+    """Phase 7b tables: finished seasons don't change, so the daily run only rebuilds the current season
+    (plus any season the table doesn't have yet). --refresh or --step rebuilds them all."""
+    seasons, current = season_range(conn)
+    if RELOAD_ALL:
+        return seasons
+    have = {s for (s,) in conn.execute(f"select distinct season from {table}")}
+    return [s for s in seasons if s == current or s not in have]
+
+
+def replace_season(conn, table, season, columns, rows):
+    conn.execute(f"delete from {table} where season = %s", (season,))
+    copy_rows(conn, table, columns, rows)
+
+
+def load_snaps(conn):
+    seasons = seasons_to_load(conn, "core.nfl_snap_week")
+    players = read_if_saved("players.parquet", ["gsis_id", "pfr_id"])
+    pfr_to_gsis = {}
+    if players is not None:
+        for gsis, pfr in players.drop_nulls().iter_rows():
+            pfr_to_gsis[pfr.strip()] = gsis.strip()
+    to_int, to_pct = cleaner("smallint", "snaps"), cleaner("numeric", "pct")
+    columns = ["gsis_id", "season", "week", "game_id", "team", "position", "pfr_player_id", "offense_snaps",
+               "offense_pct", "st_snaps", "st_pct", "link_method"]
+    for season in seasons:
+        df = read_if_saved(f"snap_counts_{season}.parquet")
+        if df is None:
+            continue
+        df = df.filter((pl.col("game_type") == "REG") & pl.col("position").is_in(list(KEEP_POSITIONS)))
+        # fallback for players nflverse's player list can't link: same week + team + name in the stat lines
+        by_name = defaultdict(set)
+        for gsis, name, team, week in read(f"player_stats_{season}.parquet").select(
+                "player_id", "player_display_name", "team", "week").iter_rows():
+            if gsis and name:
+                by_name[(week, team, normalize(name))].add(gsis)
+        rows, methods, unlinked = {}, Counter(), 0
+        for r in df.iter_rows(named=True):
+            pfr = (r["pfr_player_id"] or "").strip() or None
+            gsis, method = pfr_to_gsis.get(pfr), "pfr_id"
+            if not gsis:
+                found = by_name.get((r["week"], r["team"], normalize(r["player"] or "")), set())
+                if len(found) != 1:
+                    unlinked += 1
+                    continue
+                gsis, method = next(iter(found)), "name"
+            snaps = to_int(r["offense_snaps"]) or 0
+            key = (gsis, r["week"])
+            if key in rows and (rows[key][7] or 0) >= snaps:
+                continue                                     # listed twice: keep the row with more snaps
+            rows[key] = [gsis, season, r["week"], r["game_id"], r["team"], r["position"], pfr,
+                         to_int(r["offense_snaps"]), to_pct(r["offense_pct"]), to_int(r["st_snaps"]),
+                         to_pct(r["st_pct"]), method]
+            methods[method] += 1
+        replace_season(conn, "core.nfl_snap_week", season, columns, rows.values())
+        print(f"    {season}: {len(rows):,} player-weeks ({methods['pfr_id']:,} by id, {methods['name']:,} by name"
+              + (f", {unlinked} couldn't be linked" if unlinked else "") + ")")
+
+
+def load_injuries(conn):
+    seasons = seasons_to_load(conn, "core.nfl_injury_week")
+    league_ids = {g for (g,) in conn.execute(
+        "select distinct x.gsis_id from core.player_xref x join core.player_week pw using (player_id)")}
+    severity = {"Out": 3, "Doubtful": 2, "Questionable": 1}
+    columns = ["gsis_id", "season", "week", "team", "position", "report_status", "report_primary_injury",
+               "report_secondary_injury", "practice_status"]
+    text = cleaner("text", "injury")
+    for season in seasons:
+        df = read_if_saved(f"injuries_{season}.parquet")
+        if df is None:
+            continue
+        kind = "game_type" if "game_type" in df.columns else "season_type"
+        df = df.filter((pl.col(kind) == "REG") & pl.col("gsis_id").is_not_null()
+                       & (pl.col("position").is_in(list(KEEP_POSITIONS)) | pl.col("gsis_id").is_in(list(league_ids))))
+        rows = {}
+        for r in df.iter_rows(named=True):
+            key = (r["gsis_id"].strip(), int(r["week"]))
+            row = [key[0], season, key[1], text(r["team"]), text(r["position"]), text(r["report_status"]),
+                   text(r.get("report_primary_injury")), text(r.get("report_secondary_injury")),
+                   text(r.get("practice_status"))]
+            if key in rows and severity.get(rows[key][5], 0) >= severity.get(row[5], 0):
+                continue                                     # listed twice: keep the more serious status
+            rows[key] = row
+        replace_season(conn, "core.nfl_injury_week", season, columns, rows.values())
+        listed = Counter(r[5] for r in rows.values())
+        print(f"    {season}: {len(rows):,} player-weeks on the report "
+              f"({listed['Out']:,} Out, {listed['Doubtful']:,} Doubtful, {listed['Questionable']:,} Questionable)")
+
+
+def load_opportunity(conn):
+    seasons = seasons_to_load(conn, "core.nfl_opportunity_week")
+    to_float = cleaner("double precision", "expected")
+    columns = ["gsis_id", "season", "week", "game_id", "team", "position"] + OPPORTUNITY_COLUMNS
+    for season in seasons:
+        df = read_if_saved(f"ff_opportunity_{season}.parquet")
+        if df is None:
+            continue
+        needed = ["player_id", "week", "game_id", "posteam", "position"]
+        if [c for c in needed if c not in df.columns]:
+            raise LoadProblem("opportunity", [f"ff_opportunity_{season}.parquet has no "
+                                              f"{', '.join(c for c in needed if c not in df.columns)} column(s)"])
+        missing = [c for c in OPPORTUNITY_COLUMNS if c not in df.columns]
+        for col in missing:
+            df = df.with_columns(pl.lit(None).alias(col))
+        regular = set(regular_games(season)["game_id"].to_list())
+        df = df.filter(pl.col("player_id").is_not_null() & pl.col("game_id").is_in(list(regular)))
+        rows = {}
+        for r in df.select(needed + OPPORTUNITY_COLUMNS).iter_rows():
+            key = (r[0].strip(), int(r[1]))
+            if key not in rows:
+                rows[key] = [key[0], season, key[1], r[2], r[3], r[4]] + [to_float(v) for v in r[5:]]
+        replace_season(conn, "core.nfl_opportunity_week", season, columns, rows.values())
+        print(f"    {season}: {len(rows):,} player-weeks"
+              + (f" (not in the file, left empty: {', '.join(missing)})" if missing else ""))
+
+
+def load_pbp(conn):
+    seasons = seasons_to_load(conn, "core.nfl_def_week")
+    for season in seasons:
+        raw = read_if_saved(f"pbp_{season}.parquet", PBP_COLUMNS)
+        if raw is None:
+            continue
+        try:
+            pbp = regular_season(raw)
+        except ValueError as error:
+            raise LoadProblem("pbp", [f"pbp_{season}.parquet: {error}"])
+        usage, offense = player_usage(pbp), team_offense(pbp)
+        defense = defense_events(pbp, regular_games(season))
+        replace_season(conn, "core.nfl_usage_week", season,
+                       ["gsis_id", "season", "week", "team", "targets_rz", "targets_ez", "targets_deep",
+                        "carries_rz", "carries_gl"],
+                       ([g, season, w, t, a, b, c, d, e] for g, w, t, a, b, c, d, e in usage.iter_rows()))
+        replace_season(conn, "core.nfl_team_offense_week", season,
+                       ["team", "season", "week", "game_id", "plays", "dropbacks", "rushes", "neutral_plays",
+                        "neutral_dropbacks", "rz_plays"],
+                       ([t, season, w, g, *rest] for t, w, g, *rest in offense.iter_rows()))
+        replace_season(conn, "core.nfl_def_week", season,
+                       ["team", "season", "week", "game_id", "opponent_team", "three_and_outs", "fourth_down_stops",
+                        "st_fumble_recoveries", "opponent_points", "points_allowed"],
+                       ([t, season, w, *rest] for t, w, *rest in defense.iter_rows()))
+        print(f"    {season}: {pbp.height:,} plays -> {usage.height:,} player-weeks of usage, "
+              f"{offense.height:,} team offense weeks, {defense.height:,} team defense weeks")
+
+
+STEPS = [("xref", load_xref), ("games", load_games), ("stats", load_stats), ("teams", load_teams),
+         ("snaps", load_snaps), ("injuries", load_injuries), ("opportunity", load_opportunity), ("pbp", load_pbp)]
 
 
 def main():
@@ -428,6 +624,8 @@ def main():
     group.add_argument("--no-download", action="store_true", help="use only the saved files")
     args = parser.parse_args()
     mode = "all" if args.refresh else "none" if args.no_download else "auto"
+    global RELOAD_ALL
+    RELOAD_ALL = bool(args.refresh or args.step)
 
     with get_connection() as conn:
         for name, step in [("download", lambda c: download(c, mode))] + STEPS:
@@ -454,9 +652,15 @@ def main():
 
         size = conn.execute(
             "select pg_size_pretty(pg_database_size(current_database())), "
-            "pg_size_pretty(pg_total_relation_size('core.nfl_player_week'))").fetchone()
+            "pg_size_pretty(pg_total_relation_size('core.nfl_player_week')), "
+            "pg_size_pretty(coalesce(sum(pg_total_relation_size(format('core.%I', c.relname)::regclass)), 0)) "
+            "from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+            "where n.nspname = 'core' and c.relkind = 'r' and c.relname in "
+            "('nfl_snap_week', 'nfl_injury_week', 'nfl_opportunity_week', 'nfl_usage_week', "
+            "'nfl_team_offense_week', 'nfl_def_week')").fetchone()
         summary = conn.execute("select check_name, problems from qa.summary where problems > 0").fetchall()
-    print(f"\nDatabase size: {size[0]} (stat lines: {size[1]}). Neon's free plan allows 1 GB.")
+    print(f"\nDatabase size: {size[0]} (stat lines: {size[1]}; snaps, injuries, expected points and "
+          f"play-by-play summaries: {size[2]}). Neon's free plan allows 1 GB.")
     if summary:
         print("These checks found something to look at (select * from qa.<check name>):")
         for check, count in summary:

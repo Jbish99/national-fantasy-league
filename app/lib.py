@@ -584,6 +584,35 @@ WEATHER = [("Dome", "is_dome", "Dome", "Dome, or the roof was closed"),
            ("Weather not on file", "weather_not_on_file", "Not on file", "Outdoors, but nflverse has no weather")]
 
 
+INJURY_LETTER = {"Out": ("O", "out"), "Doubtful": ("D", "out"), "Questionable": ("Q", "q")}
+
+
+def injury_tag(status, injury=None):
+    """Sleeper-style injury tag: O / D (red) or Q (amber); the full status and injury show on hover. '' if none."""
+    if not isinstance(status, str) or status not in INJURY_LETTER:
+        return ""
+    letter, cls = INJURY_LETTER[status]
+    title = status + (f" ({injury})" if isinstance(injury, str) and injury else "") + " on that week's injury report"
+    return f'<span class="itag {cls}" title="{esc(title)}">{letter}</span>'
+
+
+def snaps_text(pct):
+    """'84% snaps' from a 0-1 share ('' when unknown)."""
+    if pct is None or pd.isna(pct):
+        return ""
+    return f"{float(pct) * 100:.0f}% snaps"
+
+
+def week_extras(where_sql, params):
+    """Rows of core.v_player_week_extras (snaps, injury report, expected points, red-zone usage), keyed by
+    (player_id, season, week). Empty if the Phase 7b SQL isn't applied yet, so pages still work."""
+    try:
+        df = query(f"select * from core.v_player_week_extras where {where_sql}", params)
+    except psycopg.Error:
+        return {}
+    return {(r["player_id"], r["season"], r["week"]): r for r in df.to_dict("records")}
+
+
 def signed(value, digits=2):
     """'+1.25' in blue / '-0.80' in red (the sign carries the meaning too). '' for missing."""
     if value is None or pd.isna(value):
@@ -765,6 +794,9 @@ a.tile-link:hover .tile {{ border-color: #4A5878; }}
 .bp .pn {{ font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; align-self: flex-start; }}
 .bp.r .pn {{ align-self: flex-end; }}
 .bp .pn .short {{ display: none; }}
+.bp .pnrow {{ display: flex; align-items: center; min-width: 0; max-width: 100%; }}
+.bp.r .pnrow {{ justify-content: flex-end; }}
+.bp .pnrow .pn {{ min-width: 0; }}
 .bp .pm {{ color: {MUTED}; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }}
 .bp .ps {{ color: #C3CBD8; font-size: 12.5px; }}
 .bp .empty {{ color: {MUTED}; font-style: italic; }}
@@ -775,6 +807,12 @@ a.tile-link:hover .tile {{ border-color: #4A5878; }}
 .bslot {{ display: flex; justify-content: center; }}
 .bdiv {{ padding: 8px 16px 6px; color: {MUTED}; font-size: 12px; font-weight: 600; letter-spacing: .04em;
   text-transform: uppercase; border-bottom: 1px solid #1E283C; background: #131B2A; }}
+/* injury tags (Phase 7b) */
+.itag {{ display: inline-block; min-width: 15px; padding: 0 3px; margin-right: 6px; border-radius: 4px; font-size: 10.5px;
+  font-weight: 800; line-height: 15px; text-align: center; vertical-align: 1px; cursor: help; }}
+.itag.out {{ background: rgba(230,103,103,.22); color: #F59A9A; }}
+.itag.q {{ background: rgba(243,197,74,.18); color: {ACCENT}; }}
+.bp.r .itag {{ margin-right: 0; margin-left: 6px; }}
 /* player page (Phase 7a) */
 .glog {{ padding: 2px 0 4px; overflow: hidden; }}
 .grow {{ display: grid; grid-template-columns: 118px 30px minmax(0,1fr) 52px 72px; align-items: center; column-gap: 12px;

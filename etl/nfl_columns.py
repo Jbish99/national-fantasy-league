@@ -96,3 +96,12 @@ TEAM_DEFENSE_COLUMNS = [
 
 # nflverse team code -> Sleeper's defense player id, where they differ
 SLEEPER_DEF_IDS = {"LA": "LAR"}
+
+# Phase 7b, core.nfl_opportunity_week: the ff_opportunity columns we keep (same names as nflverse's file;
+# stored as real). Expected stats come in pairs: <stat> (what happened) and <stat>_exp (expected from usage).
+_EXPECTED = ["pass_completions", "receptions", "pass_yards_gained", "rec_yards_gained", "rush_yards_gained",
+             "pass_touchdown", "rec_touchdown", "rush_touchdown", "pass_two_point_conv", "rec_two_point_conv",
+             "rush_two_point_conv", "pass_first_down", "rec_first_down", "rush_first_down", "pass_interception"]
+OPPORTUNITY_COLUMNS = (["pass_attempt", "rec_attempt", "rush_attempt"]
+                       + [c for stat in _EXPECTED for c in (stat, stat + "_exp")]
+                       + ["rec_fumble_lost", "rush_fumble_lost"])

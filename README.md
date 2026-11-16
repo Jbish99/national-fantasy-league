@@ -54,7 +54,7 @@ From the VS Code terminal:
 ```
 python -m etl.run_sql --all
 ```
-That runs every SQL file in order: `db/schema/001` → `013`, then `db/checks/001_validation.sql`, then
+That runs every SQL file in order: `db/schema/001` → `014`, then `db/checks/001_validation.sql`, then
 `db/seed/001_reference_data.sql`. Each file shows `ok`. Run it again **after every `git pull`** that changed
 a `.sql` file. It's harmless when nothing changed.
 
@@ -141,10 +141,24 @@ Downloads from nflverse (free, no key) and fills:
 - `core.v_player_week_full`: every rostered Sleeper player-week next to the real stat line and game conditions
 - `core.v_def_week_full`: every rostered Sleeper defense-week next to that team's stat line and points allowed
 
+Phase 7b adds (all in `db/schema/014_nfl_extras.sql`, regular season):
+- `core.nfl_snap_week`: offensive and special-teams snaps and snap share
+- `core.nfl_injury_week`: the week's injury report status (Out / Doubtful / Questionable) and practice status
+- `core.nfl_opportunity_week`: nflverse's expected stats (what an average player gets from the same touches)
+- `core.nfl_usage_week` and `core.nfl_team_offense_week`: red-zone, end-zone, deep and goal-line looks, and team
+  play volume, summed from play-by-play
+- `core.nfl_def_week`: the DEF pieces the team stat line doesn't have (3-and-outs, 4th-down stops, special-teams
+  fumble recoveries, points allowed *by the defense*), so `core.v_def_league_points` can rebuild DEF fantasy
+  points with our rules. `select * from qa.def_points_accuracy;` shows how often that equals Sleeper (95%+ is normal)
+- `core.v_expected_league_points`, `core.v_player_week_extras`, `core.v_started_while_out`: what the app reads
+
+Play-by-play is the big download (about 15–20 MB a season). The database only keeps the weekly sums, so the
+7b tables add about 30 MB. After the first run, each day rebuilds only the current season of these tables.
+
 The downloaded files are saved in `data/cache/nflverse/` (git-ignored) and logged in `raw.nflverse_pull`.
 Each run re-downloads only what can still change (the ID crosswalk, the schedule, this season's stats).
 Options: `--refresh` (re-download everything), `--no-download` (rebuild from the saved files),
-`--step xref|games|stats|teams`.
+`--step xref|games|stats|teams|snaps|injuries|opportunity|pbp`.
 
 **Checking the NFL ids with points.** `core.v_nfl_league_points` scores every stat line with that season's
 league rules (from Sleeper's scoring settings). When a player's NFL id is right, it matches Sleeper's points:
@@ -168,17 +182,18 @@ the same name goes in the app's Secrets instead.
 
 Pages, in two sidebar sections:
 - **League history:** Home (champions, latest week), Standings (all-time or one season), Box scores (Phase 7a:
-  any game, both lineups slot by slot with real NFL stat lines), Head-to-head (matrix + any series), Champions &
+  any game, both lineups slot by slot with real NFL stat lines, snap share and injury tags), Head-to-head (matrix + any series), Champions &
   playoffs, Record book (team records + best/worst single-game player performances), Franchises (season by
   season, scoring trend, every opponent), Players (Phase 7a: every week a player was on a league roster, with
-  his stat line, NFL opponent, weather, who had him, and how he scores by conditions). These read the official
+  his stat line, NFL opponent, weather, who had him, how he scores by conditions, plus usage and expected points per season). These read the official
   record through `db/schema/008_app_views.sql`, the player game log in `db/schema/012_player_game_log.sql` and the
   weather splits in `db/schema/013_weather_splits.sql`.
-- **Getting better:** Lineups (points left on the bench vs the best possible lineup, wrong start/sit calls),
-  Luck (actual record vs all-play record), Trades & waivers (what each side got, best pickups, FAAB),
+- **Getting better:** Lineups (points left on the bench vs the best possible lineup, wrong start/sit calls,
+  starters listed Out or Doubtful), Luck (actual record vs all-play record, starters' points over expected), Trades & waivers (what each side got, best pickups, FAAB),
   Draft (each pick vs a replacement-level player at his position, compared with its round), Positions
   (starters' points per week by position vs the league average, plus weather by position). These read
-  `db/schema/009_insight_views.sql` (weather: `013_weather_splits.sql`).
+  `db/schema/009_insight_views.sql` (weather: `013_weather_splits.sql`; injuries, expected points and DEF
+  rebuild: `014_nfl_extras.sql`).
 
 Every view also works in DBeaver, e.g. `select * from core.v_lineup_week` or `core.v_draft_value`.
 Results are cached for 10 minutes, so new data shows up within that. To see it right away, open the app's
@@ -311,9 +326,11 @@ app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared loo
 
 1. Database + schema ✅
 2. History backfill + validation ✅ (once the player-name review is done)
-3. NFL stats + player ID mapping ✅ (rebuilding DEF fantasy points is parked for Advanced Statistics)
+3. NFL stats + player ID mapping ✅ (DEF fantasy points rebuilt from play-by-play in 7b)
 4. Streamlit first version ✅ (history + "getting better" pages)
 5. Deploy ✅ (https://national-fantasy-league.streamlit.app/)
 6. Weekly in-season refresh ✅ (GitHub Actions, daily)
 8. Redesign with league graphics ✅ (dark, card-based; see section 12)
-7. NFL stat enrichment: 7a ✅ (Players, Box scores, player records, weather splits); 7b (new nflverse data) next
+7. NFL stat enrichment ✅: 7a (Players, Box scores, player records, weather splits); 7b (snaps, injuries,
+   expected points, play-by-play usage, DEF points rebuilt)
+9. Trade analyzer (next)

@@ -463,6 +463,46 @@ having count(*) > 1;
 comment on view qa.player_log_duplicates is 'Player-weeks that appear more than once in core.v_player_game_log.';
 
 
+-- Phase 7b: team defense (DEF) points rebuilt from nflverse (core.v_def_league_points) vs what Sleeper
+-- gave every rostered defense. Not a problem list: some gaps are expected (stat providers count passes
+-- defended and tackles for loss a little differently; late stat corrections).
+create or replace view qa.def_points_vs_sleeper as
+select pw.season, pw.week, pw.franchise_code, pw.player_id as defense,
+       pw.points                  as sleeper_points,
+       d.league_points            as rebuilt_points,
+       pw.points - d.league_points as diff
+from core.player_week pw
+join core.player p on p.player_id = pw.player_id and p.position = 'DEF'
+left join core.v_def_league_points d on d.sleeper_def_id = pw.player_id and d.season = pw.season and d.week = pw.week
+where not (pw.season = 2022 and pw.week = 17 and pw.player_id in ('BUF', 'CIN'));   -- cancelled game
+
+comment on view qa.def_points_vs_sleeper is 'Info: Sleeper DEF points vs points rebuilt from nflverse, per rostered defense-week.';
+
+drop view if exists qa.def_points_accuracy_low;
+drop view if exists qa.def_points_accuracy;      -- info view; dropped so its columns can change
+create view qa.def_points_accuracy as
+select season,
+       count(*) filter (where rebuilt_points is not null)                                as compared,
+       count(*) filter (where abs(diff) < 0.01)                                          as exact,
+       count(*) filter (where abs(diff) >= 0.01 and abs(diff) <= 1)                      as within_1,
+       count(*) filter (where abs(diff) > 1)                                             as off_by_more,
+       count(*) filter (where rebuilt_points is null and sleeper_points <> 0)            as no_rebuild,
+       round(100.0 * count(*) filter (where abs(diff) < 0.01)
+             / nullif(count(*) filter (where rebuilt_points is not null), 0), 1)         as exact_pct
+from qa.def_points_vs_sleeper
+group by season
+order by season;
+
+comment on view qa.def_points_accuracy is 'Info: share of rostered defense-weeks where rebuilt DEF points equal Sleeper''s, by season.';
+
+-- 25. A season where rebuilt DEF points match Sleeper on fewer than 90% of defense-weeks: a rule or a
+--     play-by-play column probably changed. Affects DEF weather splits only, so the refresh just warns.
+create view qa.def_points_accuracy_low as
+select * from qa.def_points_accuracy where compared >= 50 and exact_pct < 90;
+
+comment on view qa.def_points_accuracy_low is 'Seasons where rebuilt DEF points match Sleeper less than 90% of the time.';
+
+
 -- Not a problem list: our best-possible-lineup totals vs Sleeper's own "potential points"
 -- (rosters settings ppts), regular season, completed Sleeper seasons. A close match means
 -- the bench numbers on the Lineups page agree with Sleeper. Sleeper may treat injured-reserve
@@ -572,6 +612,7 @@ union all select 'nfl_id_suspect',                      count(*) from qa.nfl_id_
 union all select 'league_defenses_without_stat_line',   count(*) from qa.league_defenses_without_stat_line
 union all select 'unknown_lineup_slots',                count(*) from qa.unknown_lineup_slots
 union all select 'best_lineup_below_actual',            count(*) from qa.best_lineup_below_actual
-union all select 'player_log_duplicates',               count(*) from qa.player_log_duplicates;
+union all select 'player_log_duplicates',               count(*) from qa.player_log_duplicates
+union all select 'def_points_accuracy_low',             count(*) from qa.def_points_accuracy_low;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';

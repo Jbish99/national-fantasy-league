@@ -10,9 +10,9 @@ Open a game straight from a link: boxscore?game=<game_id> (lib.box_url()).
 import pandas as pd
 import streamlit as st
 
-from lib import (box_url, chip, city, esc, footer, full_name, game_label, hero, html, nfl_game_text, ordinal,
-                 player_url, position_chip, pts, query, record, records_through, require, score_tile, section,
-                 stat_cell, team_games, text, tiles)
+from lib import (box_url, chip, city, esc, footer, full_name, game_label, hero, html, injury_tag, nfl_game_text,
+                 ordinal, player_url, position_chip, pts, query, record, records_through, require, score_tile, section,
+                 snaps_text, stat_cell, team_games, text, tiles, week_extras)
 
 require("core.v_player_game_log")
 
@@ -117,6 +117,7 @@ if log.empty:
 best = query("select franchise_code, player_id, in_best_lineup from core.v_lineup_players "
              "where season = %s and week = %s and franchise_code in (%s, %s)", (season, week, a, b))
 log = log.merge(best, on=["franchise_code", "player_id"], how="left")
+extras = week_extras("season = %s and week = %s and player_id = any(%s)", (season, week, log["player_id"].tolist()))
 slots = query("select slot_index, slot from core.roster_slot where season = %s and slot <> 'BN' order by slot_index",
               (season,))
 week_totals = query("select franchise_code, points, custom_points from core.team_week "
@@ -140,10 +141,13 @@ def short(r):
 def player_cell(r, where):
     if r is None:
         return f'<div class="bp {where}"><span class="empty">Empty</span></div>'
+    x = extras.get((r["player_id"], season, week), {})
     game = f'{r["nfl_team"]} {nfl_game_text(r)}' if isinstance(r["nfl_team"], str) else ""
-    meta = " · ".join(x for x in (text(r["position"]), game) if x)
-    return (f'<div class="bp {where}"><a class="pn lnk" href="{esc(player_url(r["player_id"]))}">'
-            f'<span class="full">{esc(r["player_name"])}</span><span class="short">{esc(short(r))}</span></a>'
+    meta = " · ".join(v for v in (text(r["position"]), game, snaps_text(x.get("offense_pct"))) if v)
+    tag = injury_tag(x.get("injury_status"), x.get("injury"))
+    name = (f'<a class="pn lnk" href="{esc(player_url(r["player_id"]))}">'
+            f'<span class="full">{esc(r["player_name"])}</span><span class="short">{esc(short(r))}</span></a>')
+    return (f'<div class="bp {where}"><span class="pnrow">{tag + name if where == "l" else name + tag}</span>'
             f'<span class="pm">{esc(meta)}</span>'
             f'<span class="ps">{stat_cell(r)}</span></div>')
 
@@ -208,8 +212,9 @@ html(f'<section class="card box" aria-label="Box score">{head}{"".join(starters)
      f'<div class="bdiv">Bench</div>{"".join(bench)}'
      f'{total_row("Bench", bench_sum[a], bench_sum[b])}</section>')
 
-notes = ["Points are Sleeper's for each player. Stat lines and opponents are the real NFL games (nflverse). "
-         "Gold bench points with * = he belonged in the best possible lineup."]
+notes = ["Points are Sleeper's for each player. Stat lines, opponents and snap shares are the real NFL games "
+         "(nflverse). Gold bench points with * = he belonged in the best possible lineup. O / D / Q = listed Out, "
+         "Doubtful or Questionable on that week's NFL injury report (hover for the injury)."]
 for code, official in ((a, pa), (b, pb)):
     total = sleeper_total.get(code)
     if total is None or official is None or pd.isna(official) or abs(float(total) - float(official)) < 0.01:
