@@ -6,11 +6,11 @@ Trades and waiver/free-agent pickups: what each team actually got out of them.
 import pandas as pd
 import streamlit as st
 
-from lib import footer, full_name, query, table
+from lib import (city, esc, footer, full_name, html, html_table, logo, page_header, position_chip, pts, query,
+                 section, team)
 
-st.title("Trades & waivers")
-st.caption("Points are what an added player scored for his new team that season, from the week of the move. "
-           "'As starter' counts only the weeks he was in the starting lineup.")
+page_header("Trades & waivers", "Points are what an added player scored for his new team that season, from the week "
+                                "of the move. 'As starter' counts only the weeks he was in the starting lineup.")
 
 acq = query(
     """
@@ -29,7 +29,8 @@ trades = query(
     """
 )
 seasons = sorted(set(acq["season"]) | set(trades["season"]), reverse=True)
-choice = st.selectbox("Season", ["All seasons"] + [int(s) for s in seasons])
+left, _ = st.columns([1, 3])
+choice = left.selectbox("Season", ["All seasons"] + [int(s) for s in seasons])
 if choice != "All seasons":
     acq = acq[acq["season"] == choice]
     trades = trades[trades["season"] == choice]
@@ -43,6 +44,7 @@ with trades_tab:
     faab = query("select * from core.transaction_faab")
     if trades.empty:
         st.info("No completed trades in this selection.")
+    cards = []
     for trade in trades.sort_values("created_at", ascending=False).itertuples():
         tid = trade.transaction_id
         deal = acq[(acq["transaction_id"] == tid)]
@@ -55,37 +57,44 @@ with trades_tab:
         )
         if not teams:
             continue
-        with st.container(border=True):
-            st.markdown(f"**{trade.season}, week {int(trade.week)}**: " + " / ".join(full_name(t) for t in teams))
-            cols = st.columns(len(teams))
-            totals = {}
-            for col, team in zip(cols, teams):
-                got = deal[deal["franchise_code"] == team]
-                totals[team] = got["points_started"].sum()
-                lines = [f"{r.full_name} ({r.position}): {r.points_started:.1f} as starter, {r.points_rostered:.1f} total"
-                         for r in got.itertuples()]
-                lines += [f"{int(p.pick_season)} round {int(p.pick_round)} pick (originally {full_name(p.original_code)}'s)"
-                          for p in deal_picks[deal_picks["to_code"] == team].itertuples()]
-                lines += [f"${int(f.amount)} FAAB" for f in deal_faab[deal_faab["to_code"] == team].itertuples()]
-                col.markdown(f"*{full_name(team)} got:*\n" + "\n".join(f"- {line}" for line in lines or ["nothing"]))
-            if len(totals) == 2 and max(totals.values()) > 0:
-                best = max(totals, key=totals.get)
-                gap = abs(list(totals.values())[0] - list(totals.values())[1])
-                st.caption(f"Starter points from the players received: {full_name(best)} +{gap:.1f}. "
-                           "Draft picks and FAAB aren't counted.")
+        sides, totals = [], {}
+        for code in teams:
+            got = deal[deal["franchise_code"] == code]
+            totals[code] = got["points_started"].sum()
+            lines = [f'{position_chip(r.position)} <strong>{esc(r.full_name)}</strong> '
+                     f'<span class="muted">{r.points_started:.1f} as starter, {r.points_rostered:.1f} total</span>'
+                     for r in got.itertuples()]
+            lines += [f"{int(p.pick_season)} round {int(p.pick_round)} pick "
+                      f'<span class="muted">(originally {esc(city(p.original_code))}\'s)</span>'
+                      for p in deal_picks[deal_picks["to_code"] == code].itertuples()]
+            lines += [f"${int(f.amount)} FAAB" for f in deal_faab[deal_faab["to_code"] == code].itertuples()]
+            items = "".join(f"<li>{line}</li>" for line in lines) or '<li class="muted">nothing</li>'
+            sides.append(f'<div class="trade-side"><div class="tc">{logo(code, trade.season, 26)}'
+                         f'<span>{esc(full_name(code))} got</span></div><ul>{items}</ul></div>')
+        foot = ""
+        if len(totals) == 2 and max(totals.values()) > 0:
+            best = max(totals, key=totals.get)
+            gap = abs(list(totals.values())[0] - list(totals.values())[1])
+            foot = (f'<div class="trade-foot">Starter points from the players received: '
+                    f'<strong>{esc(city(best))} +{gap:.1f}</strong>. Draft picks and FAAB aren\'t counted.</div>')
+        cards.append(f'<article class="trade"><div class="trade-head"><span><strong style="color:#F2F5FA">'
+                     f'{trade.season}, week {int(trade.week)}</strong></span>'
+                     f'<span>{" / ".join(esc(city(t)) for t in teams)}</span></div>'
+                     f'<div class="trade-sides">{"".join(sides)}</div>{foot}</article>')
+    if cards:
+        html(f'<div style="display:flex;flex-direction:column;gap:12px">{"".join(cards)}</div>')
 
 # --- pickups ----------------------------------------------------------------------------------
 with pickups_tab:
+    section("Best pickups", "Waiver claims and free agents, by points as a starter")
     pickups = acq[acq["type"].isin(["waiver", "free_agent"])].sort_values("points_started", ascending=False).head(25)
-    table(
-        [{"Player": r.full_name, "Pos": r.position, "Team": full_name(r.franchise_code), "Season": str(r.season),
-          "Week added": int(r.week), "How": "Waiver" if r.type == "waiver" else "Free agent",
-          "FAAB": None if pd.isna(r.faab_bid) else int(r.faab_bid),
-          "Points as starter": r.points_started, "Weeks started": int(r.weeks_started)}
-         for r in pickups.itertuples()],
-        column_config={"Points as starter": st.column_config.NumberColumn(format="%.2f"),
-                       "FAAB": st.column_config.NumberColumn(format="$%d")},
-    )
+    html(html_table(
+        [("Player", "l"), ("Pos", "l"), ("Team", "l"), ("Season", "l"), ("Week added", "r"), ("How", "l"),
+         ("FAAB", "r"), ("Points as starter", "r"), ("Weeks started", "r")],
+        [[f"<strong>{esc(r.full_name)}</strong>", position_chip(r.position), team(r.franchise_code, r.season),
+          str(r.season), str(int(r.week)), "Waiver" if r.type == "waiver" else "Free agent",
+          "" if pd.isna(r.faab_bid) else f"${int(r.faab_bid)}", f'<span class="big-n">{r.points_started:.2f}</span>',
+          str(int(r.weeks_started))] for r in pickups.itertuples()]))
 
 # --- FAAB ---------------------------------------------------------------------------------------
 with faab_tab:
@@ -97,13 +106,13 @@ with faab_tab:
             spent=("faab_bid", "sum"), claims=("player_id", "count"), points=("points_started", "sum")).reset_index()
         spend["per_dollar"] = spend["points"] / spend["spent"].where(spend["spent"] > 0)
         spend = spend.sort_values("points", ascending=False)
-        table(
-            [{"Team": full_name(r.franchise_code), "Claims won": int(r.claims), "FAAB spent": int(r.spent or 0),
-              "Starter points from claims": r.points, "Points per $": r.per_dollar} for r in spend.itertuples()],
-            column_config={"FAAB spent": st.column_config.NumberColumn(format="$%d"),
-                           "Starter points from claims": st.column_config.NumberColumn(format="%.2f"),
-                           "Points per $": st.column_config.NumberColumn(format="%.2f")},
-        )
+        section("FAAB spending", "Starter points from waiver claims")
+        html(html_table(
+            [("Team", "l"), ("Claims won", "r"), ("FAAB spent", "r"), ("Starter points from claims", "r"),
+             ("Points per $", "r")],
+            [[team(r.franchise_code, None if choice == "All seasons" else choice, name="full"), str(int(r.claims)),
+              f"${int(r.spent or 0)}", pts(r.points), "" if pd.isna(r.per_dollar) else f"{r.per_dollar:.2f}"]
+             for r in spend.itertuples()]))
         st.caption("Only claims that went through are counted. Failed bids are in the database (core.transaction) "
                    "but cost nothing.")
 footer()

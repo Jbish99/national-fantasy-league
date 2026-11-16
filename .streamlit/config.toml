@@ -1,7 +1,40 @@
 # .streamlit/config.toml: app look and server settings (no secrets here; those go in secrets.toml, which git ignores)
+# Phase 8 look: dark navy, gold highlight, Archivo (served from app/static/fonts, so no Google Fonts call).
+# The shared CSS and team-colored pieces live in app/lib.py (style()).
+
 [theme]
-base = "light"              # the chart colors are chosen for a light background
-primaryColor = "#2a78d6"
+base = "dark"
+primaryColor = "#F3C54A"            # gold: selected controls, focus rings, links
+backgroundColor = "#0E1421"         # page
+secondaryBackgroundColor = "#172033" # cards, inputs, table headers
+textColor = "#F2F5FA"
+linkColor = "#F3C54A"
+linkUnderline = false
+borderColor = "#26314A"
+dataframeBorderColor = "#232E45"
+dataframeHeaderBackgroundColor = "#131B2A"
+showWidgetBorder = true
+baseRadius = "10px"
+font = "Archivo, system-ui, sans-serif"
+headingFont = "Archivo, system-ui, sans-serif"
+baseFontSize = 15
+# dark-mode steps of the reference chart palette (validated against this background)
+chartCategoricalColors = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#0ca30c", "#9085e9", "#e66767"]
+blueColor = "#7FBCFF"
+redColor = "#F08585"
+
+[[theme.fontFaces]]
+family = "Archivo"
+url = "app/static/fonts/archivo.woff2"
+weight = "100 900"
+
+[theme.sidebar]
+backgroundColor = "#0A0F19"
+secondaryBackgroundColor = "#141C2B"
+borderColor = "#1D2638"
+
+[server]
+enableStaticServing = true          # serves app/static/ (league art, font) at app/static/...
 
 [browser]
 gatherUsageStats = false

@@ -1,16 +1,27 @@
 """
 app/streamlit_app.py
 
-The National Fantasy League history dashboard (Phase 4, first version).
+The National Fantasy League history dashboard.
 
 Run it on your computer from the project root:
     streamlit run app/streamlit_app.py
 It opens in your browser at http://localhost:8501. Stop it with Ctrl+C in the terminal.
 """
 
+import mimetypes
+
 import streamlit as st
 
-st.set_page_config(page_title="National Fantasy League", page_icon=":material/sports_football:", layout="wide")
+from lib import PROJECT_ROOT, style
+
+# Serve the end-zone banners and the font with the right file type (older Pythons don't know these two).
+mimetypes.add_type("image/webp", ".webp")
+mimetypes.add_type("font/woff2", ".woff2")
+
+st.set_page_config(page_title="National Fantasy League",
+                   page_icon=str(PROJECT_ROOT / "app" / "static" / "league" / "LEAGUE" / "league_logo.png"),
+                   layout="wide")
+style()
 
 pages = st.navigation(
     {

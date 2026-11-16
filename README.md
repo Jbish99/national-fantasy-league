@@ -237,19 +237,35 @@ It runs `python -m etl.refresh`, which does, in order: `run_sql --all` → `pull
 - **Secret:** the workflow needs the repository secret `DATABASE_URL_UNPOOLED` (Settings → Secrets and
   variables → Actions), the same value as in your `.env`.
 
-## 12. League graphics (phase 8 prep)
+## 12. League graphics and the app's look (Phase 8)
 
-Helmets, logos, end-zone banners and team colors live in `app/static/league/` (web-sized PNGs) with a list in
-`app/static/league/assets.csv`. Don't copy images in by hand. Fill in your `league_assets` sheet (one row per
-image, with the full path to the original on your computer) and run:
+Helmets, logos, end-zone banners and team colors live in `app/static/league/` with a list in
+`app/static/league/assets.csv`. The app reads that list, so new art shows up without code changes.
+Don't copy images in by hand. Fill in your `league_assets` sheet (one row per image, with the full path to the
+original on your computer) and run:
 
     python -m etl.import_league_assets "C:\\path\\to\\league_assets.xlsx"
 
 It finds each image (add `--look-in "<folder>"` if the art has moved), trims empty edges, shrinks it to web size,
-fixes colors Excel mangled (lost leading zeros, a letter O typed for a zero), and writes the list. Then it shows
-anything left to fix. Look over `data/cache/league_assets_preview.png` (your art on a dark background), then commit
-`app/static/league/`. Re-run it whenever the sheet changes; it keeps the folder in step with the sheet.
+saves end-zone banners as WebP, fixes colors Excel mangled (lost leading zeros, a letter O typed for a zero), and
+writes the list. It also makes a **left-facing copy of every helmet** for matchup cards (helmets face each other).
+Lettering stays readable: the decal is flipped back using the points in `data/manual/helmet_decals.csv`. If you
+replace a helmet with lettering on it and the importer says it can't find the decal, update that row's points.
+A helmet row of your own with `facing = left` wins over the generated copy.
+
+Look over `data/cache/league_assets_preview.png` (your art on a dark background), then commit `app/static/league/`.
+Re-run it whenever the sheet changes; it keeps the folder in step with the sheet.
 Keep the .ai/.psd originals on OneDrive, not in GitHub.
+
+Sheet rules:
+- `franchise_code` uses the league's codes: **OAK = Oakland Panthers, OAP = Oak Park Trash Pandas**.
+- Leave `season_to` blank for art that's still in use.
+- For older looks, add rows with `season_from` / `season_to`: the app shows that art for those seasons. Until
+  then, every season uses today's art.
+- Special logos (like Fantasy Bowl VII) get the season(s) they belong to.
+
+The look itself: theme in `.streamlit/config.toml` (dark, gold highlight, Archivo font served from
+`app/static/fonts/`), shared CSS and cards (matchup card, score tiles, tables) in `app/lib.py`.
 
 ## Where the official history comes from
 
@@ -276,9 +292,9 @@ db/reset_core.sql    drops core + qa for a clean rebuild (raw is kept)
 etl/                 scripts that pull from the APIs and load the database (+ setup_app_login.py, refresh.py)
 data/manual/         All-In-One.xlsx (the official league history workbook) and other hand-kept files
 data/cache/          big downloads like Sleeper /players/nfl (git-ignored)
-app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), views/ (one file per page),
-                     requirements.txt (only what the deployed app needs)
-.streamlit/          config.toml (theme); secrets.toml (the app's read-only login) is git-ignored
+app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared look + helpers), views/ (one file per page),
+                     static/ (league art, font, sidebar wordmark), requirements.txt (only what the deployed app needs)
+.streamlit/          config.toml (theme, static files); secrets.toml (the app's read-only login) is git-ignored
 .github/workflows/   refresh.yml: the daily refresh on GitHub
 ```
 
@@ -290,3 +306,4 @@ app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared), v
 4. Streamlit first version ✅ (history + "getting better" pages)
 5. Deploy ✅ (https://national-fantasy-league.streamlit.app/)
 6. Weekly in-season refresh ✅ (GitHub Actions, daily)
+8. Redesign with league graphics ✅ (dark, card-based; see section 12)
