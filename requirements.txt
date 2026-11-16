@@ -10,3 +10,4 @@ nflreadpy>=0.1.5   # brings polars with it
 
 # Phase 4: the dashboard app
 streamlit>=1.50    # brings altair (charts) with it
+pillow>=10.1          # etl/import_league_assets.py (resizing the league graphics)

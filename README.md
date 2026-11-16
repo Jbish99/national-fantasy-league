@@ -237,6 +237,20 @@ It runs `python -m etl.refresh`, which does, in order: `run_sql --all` → `pull
 - **Secret:** the workflow needs the repository secret `DATABASE_URL_UNPOOLED` (Settings → Secrets and
   variables → Actions), the same value as in your `.env`.
 
+## 12. League graphics (phase 8 prep)
+
+Helmets, logos, end-zone banners and team colors live in `app/static/league/` (web-sized PNGs) with a list in
+`app/static/league/assets.csv`. Don't copy images in by hand. Fill in your `league_assets` sheet (one row per
+image, with the full path to the original on your computer) and run:
+
+    python -m etl.import_league_assets "C:\\path\\to\\league_assets.xlsx"
+
+It finds each image (add `--look-in "<folder>"` if the art has moved), trims empty edges, shrinks it to web size,
+fixes colors Excel mangled (lost leading zeros, a letter O typed for a zero), and writes the list. Then it shows
+anything left to fix. Look over `data/cache/league_assets_preview.png` (your art on a dark background), then commit
+`app/static/league/`. Re-run it whenever the sheet changes; it keeps the folder in step with the sheet.
+Keep the .ai/.psd originals on OneDrive, not in GitHub.
+
 ## Where the official history comes from
 
 - **`core.game`** is the official record of every game (2020 →). It's built from the All-In-One workbook.
