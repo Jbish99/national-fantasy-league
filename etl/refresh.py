@@ -41,6 +41,7 @@ WARN_ONLY = {
     "league_defenses_without_stat_line": NFL_LAG,
     "unknown_lineup_slots": "a new lineup slot type (affects the Lineups page only); ask Claude",
     "best_lineup_below_actual": "a player's position looks off (affects the Lineups page only); ask Claude",
+    "player_log_duplicates": "a player shows twice in a week on the Player / Box score pages; ask Claude",
 }
 # Known, accepted counts. custom_points_used = 2: the 2022 Fantasy Bowl (co-champions).
 EXPECTED = {"custom_points_used": 2}

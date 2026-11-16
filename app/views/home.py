@@ -7,7 +7,7 @@ this season's standings, and every champion.
 import pandas as pd
 import streamlit as st
 
-from lib import (chip, city, footer, full_name, html, html_table, hero, league_art, logo, ordinal,
+from lib import (box_url, chip, city, footer, full_name, html, html_table, hero, league_art, logo, ordinal,
                  page_header, provisional_weeks, pts, query, records_through, roman, score_tile, section,
                  streak_chip, streaks, team, team_games, tiles)
 
@@ -50,7 +50,7 @@ def rec(code):
 
 html(hero({"code": winner, "score": featured["points_for"], "season": latest_season, "record": rec(winner)},
           {"code": loser, "score": featured["points_against"], "season": latest_season, "record": rec(loser)},
-          label=label, sublabel=f"{latest_season}, week {latest_week}"))
+          label=label, sublabel=f"{latest_season}, week {latest_week}", href=box_url(featured["game_id"])))
 
 # --- every result, and the standings -----------------------------------------------------------------
 left, right = st.columns([11, 9], gap="large")
@@ -63,7 +63,7 @@ with left:
             tags += chip(g.international_location, "plain")
         cards.append(score_tile({"code": g.franchise_code, "score": g.points_for, "record": records.get(g.franchise_code)},
                                 {"code": g.opponent_code, "score": g.points_against, "record": records.get(g.opponent_code)},
-                                latest_season, tags=tags))
+                                latest_season, footer_left="Box score ›", tags=tags, href=box_url(g.game_id)))
     html(tiles(cards))
 with right:
     section(f"{latest_season} standings", "Record, then points for")

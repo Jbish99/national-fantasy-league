@@ -28,10 +28,13 @@ pages = st.navigation(
         "League history": [
             st.Page("views/home.py", title="Home", icon=":material/home:", default=True),
             st.Page("views/standings.py", title="Standings", icon=":material/format_list_numbered:"),
+            # url_path: the page addresses lib.box_url() / lib.player_url() link to
+            st.Page("views/box_score.py", title="Box scores", icon=":material/scoreboard:", url_path="boxscore"),
             st.Page("views/head_to_head.py", title="Head-to-head", icon=":material/swords:"),
             st.Page("views/champions.py", title="Champions & playoffs", icon=":material/emoji_events:"),
             st.Page("views/record_book.py", title="Record book", icon=":material/menu_book:"),
             st.Page("views/franchises.py", title="Franchises", icon=":material/shield:"),
+            st.Page("views/player.py", title="Players", icon=":material/person:", url_path="player"),
         ],
         "Getting better": [
             st.Page("views/lineups.py", title="Lineups", icon=":material/event_seat:"),

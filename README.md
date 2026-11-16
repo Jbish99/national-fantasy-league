@@ -54,7 +54,7 @@ From the VS Code terminal:
 ```
 python -m etl.run_sql --all
 ```
-That runs every SQL file in order: `db/schema/001` → `011`, then `db/checks/001_validation.sql`, then
+That runs every SQL file in order: `db/schema/001` → `012`, then `db/checks/001_validation.sql`, then
 `db/seed/001_reference_data.sql`. Each file shows `ok`. Run it again **after every `git pull`** that changed
 a `.sql` file. It's harmless when nothing changed.
 
@@ -167,9 +167,12 @@ The app reads `DATABASE_URL` (the pooled address) from `.env`. On Streamlit Comm
 the same name goes in the app's Secrets instead.
 
 Pages, in two sidebar sections:
-- **League history:** Home (champions, latest week), Standings (all-time or one season), Head-to-head
-  (matrix + any series), Champions & playoffs, Record book, Franchises (season by season, scoring trend,
-  every opponent). These read the official record through `db/schema/008_app_views.sql`.
+- **League history:** Home (champions, latest week), Standings (all-time or one season), Box scores (Phase 7a:
+  any game, both lineups slot by slot with real NFL stat lines), Head-to-head (matrix + any series), Champions &
+  playoffs, Record book (team records + best/worst single-game player performances), Franchises (season by
+  season, scoring trend, every opponent), Players (Phase 7a: every week a player was on a league roster, with
+  his stat line, NFL opponent, weather and who had him). These read the official record through
+  `db/schema/008_app_views.sql` and the player game log in `db/schema/012_player_game_log.sql`.
 - **Getting better:** Lineups (points left on the bench vs the best possible lineup, wrong start/sit calls),
   Luck (actual record vs all-play record), Trades & waivers (what each side got, best pickups, FAAB),
   Draft (each pick vs a replacement-level player at his position, compared with its round), Positions
@@ -181,6 +184,10 @@ Results are cached for 10 minutes, so new data shows up within that. To see it r
 
 Page files live in `app/views/` (not `app/pages/`: Streamlit treats a folder named `pages` as its old
 automatic menu, which breaks direct links to a page).
+
+Pages link to each other: a game opens at `/boxscore?game=2025-17-OAK-SDP`, a player at `/player?id=<Sleeper id>`.
+Clicking a score card on Home, a week on a player's page, or a name in a box score follows those links
+(the app reloads on the new page, which takes a second).
 
 ## 10. Put the app online (Phase 5)
 
@@ -307,3 +314,4 @@ app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared loo
 5. Deploy ✅ (https://national-fantasy-league.streamlit.app/)
 6. Weekly in-season refresh ✅ (GitHub Actions, daily)
 8. Redesign with league graphics ✅ (dark, card-based; see section 12)
+7. NFL stat enrichment: 7a pages ✅ (Players, Box scores, player records); weather splits and new nflverse data next

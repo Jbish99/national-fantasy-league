@@ -450,6 +450,19 @@ where best_points < actual_points - 0.01;
 comment on view qa.best_lineup_below_actual is 'Team-weeks where the best-lineup calculation fell short of the real lineup.';
 
 
+-- Phase 7a: the player game log (db/schema/012) must have exactly one row per rostered
+-- player-week. A row here means one of its joins matched twice (e.g. two NFL team codes
+-- pointing at the same Sleeper defense in one week), which would double a player on the
+-- Player and Box score pages. Affects those pages only, so the refresh just warns.
+create or replace view qa.player_log_duplicates as
+select season, week, franchise_code, player_id, count(*) as log_rows
+from core.v_player_game_log
+group by season, week, franchise_code, player_id
+having count(*) > 1;
+
+comment on view qa.player_log_duplicates is 'Player-weeks that appear more than once in core.v_player_game_log.';
+
+
 -- Not a problem list: our best-possible-lineup totals vs Sleeper's own "potential points"
 -- (rosters settings ppts), regular season, completed Sleeper seasons. A close match means
 -- the bench numbers on the Lineups page agree with Sleeper. Sleeper may treat injured-reserve
@@ -558,6 +571,7 @@ union all select 'scoring_not_covered',                 count(*) from qa.scoring
 union all select 'nfl_id_suspect',                      count(*) from qa.nfl_id_suspect
 union all select 'league_defenses_without_stat_line',   count(*) from qa.league_defenses_without_stat_line
 union all select 'unknown_lineup_slots',                count(*) from qa.unknown_lineup_slots
-union all select 'best_lineup_below_actual',            count(*) from qa.best_lineup_below_actual;
+union all select 'best_lineup_below_actual',            count(*) from qa.best_lineup_below_actual
+union all select 'player_log_duplicates',               count(*) from qa.player_log_duplicates;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';

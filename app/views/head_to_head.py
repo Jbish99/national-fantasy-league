@@ -8,8 +8,9 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from lib import (BG, DIVERGING, TEXT, chip, city, esc, footer, full_name, game_label, hero, html, html_table, logo, mix,
-                 ordinal, page_header, pts, query, record, section, short_name, show_chart, team, team_games, text_on)
+from lib import (BG, DIVERGING, TEXT, box_url, chip, city, esc, footer, full_name, game_label, hero, html, html_table,
+                 link, logo, mix, ordinal, page_header, pts, query, record, section, short_name, show_chart, team,
+                 team_games, text_on)
 
 page_header("Head-to-head")
 
@@ -138,7 +139,7 @@ else:
     for g in series.itertuples():
         won_a, won_b = g.result == "W", g.result == "L"
         tag = game_label(g._asdict())
-        label = chip(tag) if g.game_type != "regular" else tag
+        label = link(box_url(g.game_id), chip(tag) if g.game_type != "regular" else esc(tag))
         winner_cell = team(team_a) if won_a else team(team_b) if won_b else '<span class="muted">Tie (co-champions)</span>'
         body.append([f'<span class="yr">{g.season}</span>', label,
                      f'<span class="big-n{"" if won_a else " dim"}">{pts(g.points_for, g.season)}</span>',

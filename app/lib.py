@@ -19,6 +19,7 @@ import html as _html
 import os
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pandas as pd
 import psycopg
@@ -42,6 +43,7 @@ MUTED = "#8592A8"            # small labels, axis text
 ACCENT = "#F3C54A"           # gold highlight (also config primaryColor)
 # Chart colors: dark-mode steps of the validated reference palette (checked against BG and CARD).
 SERIES_BLUE = "#3987e5"      # the one data series
+SERIES_ORANGE = "#d95926"    # 2nd categorical slot (config chartCategoricalColors); passes the validator with blue
 CONTEXT_GRAY = "#8592A8"     # league average / context lines
 NEG_RED = "#e66767"
 NEUTRAL_MID = "#2B3447"      # diverging midpoint: "even" reads as no color on the dark page
@@ -341,10 +343,16 @@ POSITION_COLORS = {"QB": ("#e66767", "#F59A9A"), "RB": ("#199e70", "#4FD6A6"), "
 
 
 def position_chip(position):
-    """QB / RB / WR ... as a small tinted label (the letters carry the meaning; color just helps scanning)."""
+    """QB / RB / WR ... as a small tinted label (the letters carry the meaning; color just helps scanning).
+    Lineup slots work too: FLEX gets the RB/WR/TE colors blended, BN (bench) a plain outline."""
     position = text(position)
     if not position:
         return ""
+    if position == "FLEX":
+        stops = ", ".join(rgba(POSITION_COLORS[p][0], .24) for p in ("RB", "WR", "TE"))
+        return f'<span class="poschip" style="background:linear-gradient(90deg, {stops});color:#D5DBE6">FLEX</span>'
+    if position == "BN":
+        return '<span class="poschip" style="box-shadow:inset 0 0 0 1px #3A4763;color:#8592A8">BN</span>'
     fill, ink = POSITION_COLORS.get(position, ("#8592A8", "#C3CBD8"))
     return f'<span class="poschip" style="background:{rgba(fill, .2)};color:{ink}">{esc(position)}</span>'
 
@@ -393,10 +401,11 @@ def stat_strip(items):
     return f'<section class="card strip">{cells}</section>'
 
 
-def hero(left, right, label="", sublabel="", note_left="", note_right="", winner="auto"):
+def hero(left, right, label="", sublabel="", note_left="", note_right="", winner="auto", href=None, extra=""):
     """The big matchup card: helmets face each other, each team's color glows in from its side.
     left / right: dict(code, score, season, record, label). winner: 'auto' (higher score), 'l', 'r' or None
-    (no winner, e.g. the 2022 co-champions)."""
+    (no winner, e.g. the 2022 co-champions). href: adds a 'Box score' link (e.g. box_url(game_id)).
+    extra: more chips for the top row (e.g. chip('Provisional', 'plain'))."""
     lp, rp = team_colors(left["code"])[0], team_colors(right["code"])[0]
     bg = (f"background: radial-gradient(ellipse 46% 120% at 0% 55%, {rgba(lp, .85)} 0%, {rgba(lp, 0)} 100%), "
           f"radial-gradient(ellipse 46% 120% at 100% 55%, {rgba(rp, .85)} 0%, {rgba(rp, 0)} 100%), #121A29")
@@ -425,7 +434,9 @@ def hero(left, right, label="", sublabel="", note_left="", note_right="", winner
         dim = winner is not None and winner != mine
         return f'<span class="big{" lose" if dim else ""}">{pts(value, left.get("season"))}</span>'
 
-    meta = (chip(label) if label else "") + (f'<span class="muted small">{esc(sublabel)}</span>' if sublabel else "")
+    meta = (chip(label) if label else "") + extra + (f'<span class="muted small">{esc(sublabel)}</span>' if sublabel else "")
+    if href:
+        meta += f'<a class="lnk hero-link" href="{esc(href)}">Box score</a>'
     return (f'<section class="hero" aria-label="{esc(full_name(left["code"]))} {esc(pts(ls))}, '
             f'{esc(full_name(right["code"]))} {esc(pts(rs))}"><div class="hero-in" style="{bg}">'
             f'<div class="hero-meta">{meta}</div><div class="hero-grid">{side(left, "l")}'
@@ -435,8 +446,9 @@ def hero(left, right, label="", sublabel="", note_left="", note_right="", winner
             f'<div class="tm r">{name_block(right, "r")}</div></div></div></section>')
 
 
-def score_tile(a, b, season=None, footer_left="Final", tags=""):
-    """A small result card. a / b: dict(code, score, record). Winner on top with a marker; loser dimmed."""
+def score_tile(a, b, season=None, footer_left="Final", tags="", href=None):
+    """A small result card. a / b: dict(code, score, record). Winner on top with a marker; loser dimmed.
+    href: the whole card becomes a link (e.g. to the game's box score)."""
     sa, sb = a.get("score"), b.get("score")
     known = sa is not None and sb is not None and not pd.isna(sa) and not pd.isna(sb)
     if known and sb > sa:
@@ -452,12 +464,133 @@ def score_tile(a, b, season=None, footer_left="Final", tags=""):
                 f'<span class="sc">{pts(score, season) if score is not None else ""}</span>{mark}</div>')
 
     margin = f"by {abs(sa - sb):.2f}" if known and not tie else ("Tie" if tie else "")
-    return (f'<article class="tile">{row(a, sa, True)}{row(b, sb, False)}'
+    card = (f'<article class="tile">{row(a, sa, True)}{row(b, sb, False)}'
             f'<div class="tfoot"><span>{esc(footer_left)}{tags}</span><span>{esc(margin)}</span></div></article>')
+    return f'<a class="tile-link" href="{esc(href)}" title="Box score">{card}</a>' if href else card
 
 
 def tiles(cards, columns=2):
     return f'<div class="tiles c{columns}">{"".join(cards)}</div>'
+
+
+# ---------------------------------------------------------------------------
+# Phase 7a: players, box scores and NFL stat lines (core.v_player_game_log)
+# ---------------------------------------------------------------------------
+# Links between pages are plain relative links ('player?id=...'): clicking one reloads the app on that
+# page (st.html can't run in-app navigation). Page addresses are set in streamlit_app.py (url_path).
+
+def player_url(player_id):
+    return "player?" + urlencode({"id": player_id})
+
+
+def box_url(game_id):
+    return "boxscore?" + urlencode({"game": game_id})
+
+
+def link(url, label_html):
+    """A link inside st.html. label_html is already-built HTML (escape plain text with esc())."""
+    return f'<a class="lnk" href="{esc(url)}">{label_html}</a>'
+
+
+def require(view):
+    """Stop the page with a short note if a view from a new SQL file isn't in the database yet.
+    (Streamlit Cloud picks up new app code on push, before `python -m etl.run_sql --all` has run.)"""
+    try:
+        query(f"select 1 from {view} limit 1")
+    except psycopg.Error:
+        st.info("This page needs one database update first. On your computer, from the project folder, run "
+                "`python -m etl.run_sql --all` (or start the Refresh workflow on GitHub). Then reload this page.")
+        st.stop()
+
+
+def _num(row, column):
+    value = row.get(column)
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 0
+    return value
+
+
+def _int(value):
+    return f"{int(value)}" if float(value).is_integer() else f"{value:g}"
+
+
+def stat_line(row):
+    """A Sleeper-style stat line from a v_player_game_log row (dict-like):
+    '22/31, 287 YD, 2 TD, 1 INT · 5 CAR, 31 YD'. '' when there's no stat line."""
+    if not row.get("has_stat_line"):
+        return ""
+    n = lambda c: _num(row, c)                                          # noqa: E731
+    if row.get("position") == "DEF":
+        parts = [f"{_int(n(c))} {label}" for c, label in
+                 (("def_sacks", "SACK"), ("def_interceptions", "INT"), ("def_fumble_recoveries", "FR"),
+                  ("def_tds", "TD"), ("def_safeties", "SFTY"), ("def_blocked_kicks", "BLK")) if n(c)]
+        if row.get("def_points_allowed") is not None and not pd.isna(row.get("def_points_allowed")):
+            parts.append(f"{_int(n('def_points_allowed'))} PA")
+        return ", ".join(parts)
+
+    def group(*items):
+        return ", ".join(text for text, keep in items if keep)
+
+    passing = group((f"{_int(n('completions'))}/{_int(n('attempts'))}", True),
+                    (f"{_int(n('passing_yards'))} YD", True), (f"{_int(n('passing_tds'))} TD", n("passing_tds")),
+                    (f"{_int(n('passing_interceptions'))} INT", n("passing_interceptions"))) if n("attempts") else ""
+    rushing = group((f"{_int(n('carries'))} CAR", True), (f"{_int(n('rushing_yards'))} YD", True),
+                    (f"{_int(n('rushing_tds'))} TD", n("rushing_tds"))) if n("carries") or n("rushing_yards") else ""
+    receiving = group((f"{_int(n('receptions'))} REC", True), (f"{_int(n('receiving_yards'))} YD", True),
+                      (f"{_int(n('receiving_tds'))} TD", n("receiving_tds")),
+                      (f"{_int(n('targets'))} TGT", n("targets"))) if n("targets") or n("receptions") else ""
+    kicking = ""
+    if n("fg_att") or n("pat_att"):
+        long = f" (long {_int(n('fg_long'))})" if n("fg_made") and n("fg_long") else ""
+        kicking = group((f"{_int(n('fg_made'))}/{_int(n('fg_att'))} FG{long}", n("fg_att")),
+                        (f"{_int(n('pat_made'))}/{_int(n('pat_att'))} XP", n("pat_att")))
+    extras = group((f"{_int(n('return_tds'))} RET TD", n("return_tds")),
+                   (f"{_int(n('two_point_conversions'))} 2PT", n("two_point_conversions")),
+                   (f"{_int(n('fumbles_lost'))} FUM LOST", n("fumbles_lost")))
+    order = {"QB": (passing, rushing, receiving), "RB": (rushing, receiving, passing),
+             "K": (kicking, passing, rushing, receiving)}.get(row.get("position"), (receiving, rushing, passing))
+    groups = [g for g in (*order, kicking if row.get("position") != "K" else "", extras) if g]
+    return " · ".join(groups) or "No offensive stats"
+
+
+def stat_cell(row):
+    """The stat line as table HTML, with a quiet note when there's none."""
+    line = stat_line(row)
+    return esc(line) if line else '<span class="muted">No stats recorded</span>'
+
+
+def nfl_game_text(row):
+    """'@ KC, W 31-13' / 'vs DAL, L 17-20' from the player's side ('' when he has no stat line)."""
+    team, opponent = row.get("nfl_team"), row.get("nfl_opponent")
+    if not isinstance(team, str) or not isinstance(opponent, str):
+        return ""
+    home = row.get("is_home")
+    away = home is not None and not pd.isna(home) and not bool(home)
+    where = "@" if away and row.get("nfl_location") != "Neutral" else "vs"
+    mine, theirs = row.get("nfl_team_score"), row.get("nfl_opponent_score")
+    if mine is None or theirs is None or pd.isna(mine) or pd.isna(theirs):
+        return f"{where} {opponent}"
+    result = "W" if mine > theirs else "L" if mine < theirs else "T"
+    return f"{where} {opponent}, {result} {int(mine)}-{int(theirs)}"
+
+
+def conditions(row):
+    """'Dome', 'Roof closed', '34°F, 12 mph wind', 'Outdoors' (temperature not on file)..."""
+    roof = row.get("roof")
+    if not isinstance(roof, str):
+        return ""
+    if roof == "dome":
+        return "Dome"
+    if roof == "closed":
+        return "Roof closed"
+    temp, wind = row.get("temp"), row.get("wind")
+    bits = []
+    if temp is not None and not pd.isna(temp):
+        bits.append(f"{int(temp)}°F")
+    if wind is not None and not pd.isna(wind):
+        bits.append(f"{int(wind)} mph wind")
+    prefix = "Roof open" if roof == "open" else ("" if bits else "Outdoors")
+    return ", ".join([prefix] + bits if prefix else bits)
 
 
 # ---------------------------------------------------------------------------
@@ -592,7 +725,70 @@ tr.cut td {{ padding: 0 !important; border-bottom: 0 !important; }}
 .trade-side ul {{ margin: 8px 0 0; padding-left: 18px; color: #D5DBE6; font-size: 14px; }}
 .trade-side li {{ margin: 2px 0; }}
 .trade-foot {{ margin-top: 10px; font-size: 13px; color: {TEXT_SECONDARY}; }}
+/* links between pages (Phase 7a) */
+.stApp a.lnk {{ color: inherit; text-decoration: none; border-bottom: 1px solid rgba(243,197,74,.35); }}
+.stApp a.lnk:hover {{ color: {ACCENT}; border-bottom-color: {ACCENT}; }}
+.stApp a.hero-link {{ margin-left: auto; font-size: 13px; font-weight: 650; color: {ACCENT}; border: 0;
+  background: rgba(14,20,33,.6); padding: 4px 12px; border-radius: 999px; }}
+.stApp a.tile-link {{ display: block; color: inherit; text-decoration: none; }}
+a.tile-link .tile {{ transition: border-color .15s; height: 100%; box-sizing: border-box; }}
+a.tile-link:hover .tile {{ border-color: #4A5878; }}
+/* box score (Phase 7a) */
+.box {{ padding: 2px 0 4px; overflow: hidden; }}
+.brow {{ display: grid; grid-template-columns: minmax(0,1fr) 62px 48px 62px minmax(0,1fr); align-items: center;
+  column-gap: 8px; padding: 9px 16px; border-bottom: 1px solid #1E283C; }}
+.brow:last-child {{ border-bottom: 0; }}
+.brow.head {{ color: {MUTED}; font-size: 12.5px; font-weight: 600; padding-top: 12px; padding-bottom: 10px; border-bottom-color: {LINE}; }}
+.brow.head .r {{ text-align: right; }}
+.brow.total {{ background: #131B2A; }}
+.brow.total .bp {{ color: {MUTED}; font-size: 13px; }}
+.bp {{ min-width: 0; display: flex; flex-direction: column; gap: 2px; }}
+.bp.r {{ text-align: right; align-items: flex-end; }}
+.bp .pn {{ font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; align-self: flex-start; }}
+.bp.r .pn {{ align-self: flex-end; }}
+.bp .pn .short {{ display: none; }}
+.bp .pm {{ color: {MUTED}; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }}
+.bp .ps {{ color: #C3CBD8; font-size: 12.5px; }}
+.bp .empty {{ color: {MUTED}; font-style: italic; }}
+.bpts {{ font-weight: 800; font-variation-settings: 'wdth' 66; font-size: 22px; line-height: 1; text-align: right; }}
+.bpts.r {{ text-align: left; }}
+.bpts.lo {{ color: rgba(242,245,250,.5); }}
+.bpts.best {{ color: {ACCENT}; }}
+.bslot {{ display: flex; justify-content: center; }}
+.bdiv {{ padding: 8px 16px 6px; color: {MUTED}; font-size: 12px; font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase; border-bottom: 1px solid #1E283C; background: #131B2A; }}
+/* player page (Phase 7a) */
+.glog {{ padding: 2px 0 4px; overflow: hidden; }}
+.grow {{ display: grid; grid-template-columns: 118px 30px minmax(0,1fr) 52px 72px; align-items: center; column-gap: 12px;
+  padding: 9px 16px; border-bottom: 1px solid #1E283C; }}
+.grow:last-child {{ border-bottom: 0; }}
+.grow.head {{ color: {MUTED}; font-size: 12.5px; font-weight: 600; padding-top: 12px; padding-bottom: 10px; border-bottom-color: {LINE}; }}
+.grow.head .r {{ text-align: right; }}
+.gwk {{ display: flex; flex-direction: column; gap: 2px; font-weight: 650; min-width: 0; }}
+.gwk a.lnk {{ align-self: flex-start; }}
+.gmain {{ min-width: 0; display: flex; flex-direction: column; gap: 2px; }}
+.glog .pm {{ color: {MUTED}; font-size: 12px; font-weight: 500; }}
+.glog .ps {{ color: #C3CBD8; font-size: 13px; }}
+.grow .bpts {{ text-align: right; }}
+.grow .bslot {{ justify-content: flex-start; }}
+.phdr {{ display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }}
+.phdr .poschip {{ font-size: 14px; padding: 4px 10px; }}
+.had {{ display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0 2px; align-items: center; }}
+.had .yrs {{ color: {MUTED}; font-size: 13px; margin-left: 6px; }}
 @media (max-width: 640px) {{
+  .brow {{ grid-template-columns: minmax(0,1fr) 46px 40px 46px minmax(0,1fr); column-gap: 5px; padding: 8px 8px; }}
+  .bpts {{ font-size: 17px; }}
+  .bp .pn {{ font-size: 13.5px; }}
+  .bp .pm, .bp .ps {{ font-size: 11px; }}
+  .brow .poschip {{ min-width: 26px; padding: 2px 3px; font-size: 10.5px; }}
+  .bdiv {{ padding: 7px 8px 5px; }}
+  .bp .pn .full {{ display: none; }}
+  .bp .pn .short {{ display: inline; }}
+  .grow {{ grid-template-columns: 62px 24px minmax(0,1fr) 36px 48px; column-gap: 6px; padding: 8px 8px; }}
+  .grow .bpts {{ font-size: 16px; }}
+  .grow .lg {{ width: 22px !important; height: 22px !important; }}
+  .glog .pm, .glog .ps {{ font-size: 11px; }}
+  .grow .poschip {{ min-width: 24px; padding: 2px 3px; font-size: 10.5px; }}
   .title {{ font-size: 34px; }}
   .helmet {{ width: 54px; }}
   .helmet-badge {{ padding: 0; }}

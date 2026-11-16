@@ -1,12 +1,14 @@
 """
 app/views/record_book.py
-League records: single-game highs and lows, blowouts, close games, combined scores, seasons.
+League records: single-game highs and lows, blowouts, close games, combined scores, seasons,
+and (Phase 7a) the best and worst single-game player performances with their real stat lines.
 """
 
+import psycopg
 import streamlit as st
 
-from lib import (footer, game_label, html, html_table, ordinal, page_header, pts, query, record, section, team,
-                 team_games)
+from lib import (box_url, esc, footer, game_label, html, html_table, link, nfl_game_text, ordinal, page_header,
+                 player_url, position_chip, pts, query, record, section, stat_cell, team, team_games)
 
 page_header("Record book")
 
@@ -28,7 +30,8 @@ def ranked(df, column, ascending, n=top_n):
 
 
 def when(g):
-    return f'<span class="muted" style="white-space:nowrap">{g.season}, {game_label(g._asdict())}</span>'
+    label = link(box_url(g.game_id), f"{g.season}, {esc(game_label(g._asdict()))}")
+    return f'<span class="muted" style="white-space:nowrap">{label}</span>'
 
 
 def score_list(title, column, ascending, container):
@@ -59,7 +62,8 @@ def game_list(title, column, ascending, label, container):
              for r in rows.itertuples()], compact=True))
 
 
-single, margins, combined, seasons = st.tabs(["Single game", "Blowouts & close games", "Combined", "Seasons"])
+single, margins, combined, seasons, players = st.tabs(["Single game", "Blowouts & close games", "Combined",
+                                                       "Seasons", "Players"])
 
 with single:
     score_list("Highest scores", "points_for", False, st.container())
@@ -96,4 +100,58 @@ with seasons:
                                      ("Fewest points in a season", "points_for", True),
                                      ("Best records", "win_pct", False), ("Worst records", "win_pct", True)):
         season_list(title, column, ascending, st.container())
+
+with players:
+    st.caption("Single-game player scores in official league games, 2021 on (Sleeper; 2020 was on ESPN with no "
+               "player detail). Points follow that season's scoring: 2021-22 full PPR; 2023 on half PPR plus "
+               "first-down and TE bonuses; kickers by distance from 2026.")
+    pick, bench_col = st.columns([3, 1.4])
+    with pick:
+        position = st.segmented_control("Position", ["All", "QB", "RB", "WR", "TE", "K", "DEF"], default="All",
+                                        required=True)
+    count_bench = bench_col.toggle("Count bench players", value=False,
+                                   help="Off: only players who were in the starting lineup.")
+    which = {"All games": "all", "Regular season": "regular", "Postseason": "post"}[kind]
+
+    def performances(ascending, starters_only, n):
+        return query(
+            f"""
+            select * from core.v_player_game_log
+            where league_game_id is not null
+              and (%(pos)s::text is null or position = %(pos)s)
+              and (%(bench)s or is_starter)
+              and (%(kind)s = 'all' or (%(kind)s = 'regular') = (league_game_type = 'regular'))
+            order by league_points {"asc" if ascending else "desc"}, season, week, player_name
+            limit %(n)s
+            """,
+            {"pos": None if position == "All" else position, "bench": not starters_only, "kind": which, "n": n})
+
+    def player_list(title, df, note=None):
+        section(title, note)
+        if df.empty:
+            st.caption("Nothing here yet.")
+            return
+        ranks = df["league_points"].rank(method="min", ascending=title.startswith("Worst")).astype(int)
+        body = []
+        for rank, r in zip(ranks, df.to_dict("records")):
+            bench = "" if r["is_starter"] else ' <span class="muted small">(bench)</span>'
+            game = link(box_url(r["league_game_id"]), f"{r['season']}, week {r['week']}")
+            body.append([f'<span class="muted">{rank}</span>',
+                         f'<span class="tc">{position_chip(r["position"])}'
+                         f'{link(player_url(r["player_id"]), esc(r["player_name"]))}</span>{bench}',
+                         f'<span class="big-n">{pts(r["league_points"])}</span>', stat_cell(r),
+                         f'<span class="small" style="white-space:nowrap">{esc(nfl_game_text(r))}</span>', team(r["franchise_code"], r["season"], size=22),
+                         f'<span class="muted" style="white-space:nowrap">{game}</span>'])
+        html(html_table([("#", "l"), ("Player", "l"), ("Points", "r"), ("Stat line", "l"), ("NFL game", "l"),
+                         ("Team", "l"), ("When", "l")], body, compact=True))
+
+    try:
+        best_games = performances(False, not count_bench, 25)
+        worst_starts = performances(True, True, 15)
+    except psycopg.Error:
+        st.info("Player records need one database update first: run `python -m etl.run_sql --all` "
+                "(or start the Refresh workflow on GitHub), then reload.")
+    else:
+        player_list("Best single-game performances", best_games)
+        player_list("Worst starts", worst_starts, "Lowest scores by a starting player")
 footer()
