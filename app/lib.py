@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from psycopg.types.numeric import FloatLoader
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+LOADED_MTIME = Path(__file__).stat().st_mtime    # streamlit_app.py reloads this module when the file is newer
 ASSETS_CSV = PROJECT_ROOT / "app" / "static" / "league" / "assets.csv"
 ART_URL = "app/static/league/"
 

@@ -8,11 +8,21 @@ Run it on your computer from the project root:
 It opens in your browser at http://localhost:8501. Stop it with Ctrl+C in the terminal.
 """
 
+import importlib
 import mimetypes
+from pathlib import Path
 
 import streamlit as st
 
-from lib import PROJECT_ROOT, style
+import lib
+
+# A running app re-reads the page files after a push, but keeps the lib.py it loaded first in memory.
+# A page that imports something new from lib.py then fails with ImportError until the app restarts
+# (seen on Streamlit Cloud 2026-11-16). So: reload lib.py whenever the file on disk is newer.
+if getattr(lib, "LOADED_MTIME", None) != Path(lib.__file__).stat().st_mtime:
+    importlib.reload(lib)
+
+from lib import PROJECT_ROOT, style  # noqa: E402  (after the reload, so these are the current versions)
 
 # Serve the end-zone banners and the font with the right file type (older Pythons don't know these two).
 mimetypes.add_type("image/webp", ".webp")
