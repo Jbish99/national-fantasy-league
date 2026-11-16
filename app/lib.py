@@ -574,6 +574,23 @@ def nfl_game_text(row):
     return f"{where} {opponent}, {result} {int(mine)}-{int(theirs)}"
 
 
+# Weather buckets (db/schema/013_weather_splits.sql): label, flag column in core.v_player_week_conditions,
+# short label (charts), and what it means. Cold and Windy overlap; the others don't.
+WEATHER = [("Dome", "is_dome", "Dome", "Dome, or the roof was closed"),
+           ("Mild", "is_mild", "Mild", "Outdoors, above 40°F and wind under 15 mph"),
+           ("Cold", "is_cold", "Cold", "Outdoors, 40°F or colder"),
+           ("Windy", "is_windy", "Windy", "Outdoors, wind 15 mph or more"),
+           ("Weather not on file", "weather_not_on_file", "Not on file", "Outdoors, but nflverse has no weather")]
+
+
+def signed(value, digits=2):
+    """'+1.25' in blue / '-0.80' in red (the sign carries the meaning too). '' for missing."""
+    if value is None or pd.isna(value):
+        return ""
+    cls = "pos" if value > 0.005 else "neg" if value < -0.005 else "muted"
+    return f'<span class="{cls}">{value:+.{digits}f}</span>'
+
+
 def conditions(row):
     """'Dome', 'Roof closed', '34°F, 12 mph wind', 'Outdoors' (temperature not on file)..."""
     roof = row.get("roof")

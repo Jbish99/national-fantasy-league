@@ -54,7 +54,7 @@ From the VS Code terminal:
 ```
 python -m etl.run_sql --all
 ```
-That runs every SQL file in order: `db/schema/001` → `012`, then `db/checks/001_validation.sql`, then
+That runs every SQL file in order: `db/schema/001` → `013`, then `db/checks/001_validation.sql`, then
 `db/seed/001_reference_data.sql`. Each file shows `ok`. Run it again **after every `git pull`** that changed
 a `.sql` file. It's harmless when nothing changed.
 
@@ -171,12 +171,14 @@ Pages, in two sidebar sections:
   any game, both lineups slot by slot with real NFL stat lines), Head-to-head (matrix + any series), Champions &
   playoffs, Record book (team records + best/worst single-game player performances), Franchises (season by
   season, scoring trend, every opponent), Players (Phase 7a: every week a player was on a league roster, with
-  his stat line, NFL opponent, weather and who had him). These read the official record through
-  `db/schema/008_app_views.sql` and the player game log in `db/schema/012_player_game_log.sql`.
+  his stat line, NFL opponent, weather, who had him, and how he scores by conditions). These read the official
+  record through `db/schema/008_app_views.sql`, the player game log in `db/schema/012_player_game_log.sql` and the
+  weather splits in `db/schema/013_weather_splits.sql`.
 - **Getting better:** Lineups (points left on the bench vs the best possible lineup, wrong start/sit calls),
   Luck (actual record vs all-play record), Trades & waivers (what each side got, best pickups, FAAB),
   Draft (each pick vs a replacement-level player at his position, compared with its round), Positions
-  (starters' points per week by position vs the league average). These read `db/schema/009_insight_views.sql`.
+  (starters' points per week by position vs the league average, plus weather by position). These read
+  `db/schema/009_insight_views.sql` (weather: `013_weather_splits.sql`).
 
 Every view also works in DBeaver, e.g. `select * from core.v_lineup_week` or `core.v_draft_value`.
 Results are cached for 10 minutes, so new data shows up within that. To see it right away, open the app's
@@ -314,4 +316,4 @@ app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared loo
 5. Deploy ✅ (https://national-fantasy-league.streamlit.app/)
 6. Weekly in-season refresh ✅ (GitHub Actions, daily)
 8. Redesign with league graphics ✅ (dark, card-based; see section 12)
-7. NFL stat enrichment: 7a pages ✅ (Players, Box scores, player records); weather splits and new nflverse data next
+7. NFL stat enrichment: 7a ✅ (Players, Box scores, player records, weather splits); 7b (new nflverse data) next

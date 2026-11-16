@@ -2,18 +2,20 @@
 app/views/player.py
 Phase 7a: one player's league history. Every week he was on a league roster (2021 on, from Sleeper):
 who had him, where he was in the lineup, what he scored for that team, and his real NFL stat line,
-opponent and weather. Plus his season totals and every league move (draft, keeper, trades, pickups).
+opponent and weather. Plus his season totals, weather splits (all his NFL games from 2021 on) and every league
+move (draft, keeper, trades, pickups).
 
 Open a player straight from a link: player?id=<Sleeper player id> (lib.player_url()).
 """
 
 import altair as alt
 import pandas as pd
+import psycopg
 import streamlit as st
 
-from lib import (SERIES_BLUE, SERIES_ORANGE, box_url, chip, city, conditions, esc, footer, full_name, html,
+from lib import (SERIES_BLUE, SERIES_ORANGE, WEATHER, box_url, chip, city, conditions, esc, footer, full_name, html,
                  html_table, link, logo, nfl_game_text, position_chip, pts, query, require, section, show_chart,
-                 stat_cell, stat_strip, team, text)
+                 signed, stat_cell, stat_strip, team, text)
 
 require("core.v_player_game_log")
 
@@ -93,6 +95,36 @@ for season, s in log.groupby("season", sort=False):
                  f'{pts(top["league_points"])} <span class="muted small">wk {top["week"]}</span>'])
 html(html_table([("Season", "l"), ("Team", "l"), ("Weeks", "r"), ("Started", "r"), ("All points", "r"),
                  ("As a starter", "r"), ("Per start", "r"), ("Best week", "r")], rows[::-1]))
+
+# --- weather splits ----------------------------------------------------------------------------
+section("By conditions", "All his NFL regular-season games from 2021 on, on a league roster or not")
+if me["position"] == "DEF":
+    st.caption("Defenses get weather splits once their fantasy points are rebuilt from play-by-play (Phase 7b).")
+else:
+    try:
+        wx = query("""select w.* from core.v_player_week_conditions w
+                      join core.player_xref x on x.gsis_id = w.gsis_id
+                      where x.player_id = %s""", (pid,))
+    except psycopg.Error:
+        wx = None
+        st.caption("Weather splits need one database update: run `python -m etl.run_sql --all`, then reload.")
+    if wx is not None and wx.empty:
+        st.caption("No NFL stat lines on file for him from 2021 on.")
+    elif wx is not None:
+        body = []
+        for label, flag, _, meaning in WEATHER:
+            games = wx[wx[flag].fillna(False).astype(bool)]
+            body.append([f'{esc(label)}<div class="muted small">{esc(meaning)}</div>', str(len(games)),
+                         f'<span class="big-n">{games["league_points"].mean():.2f}</span>' if len(games) else "-",
+                         signed(games["vs_season_avg"].mean()) if len(games) else "-"])
+        body.append(['<b>All games</b>', str(len(wx)), f'<span class="big-n">{wx["league_points"].mean():.2f}</span>',
+                     '<span class="muted">0.00</span>'])
+        html(html_table([("Conditions", "l"), ("Games", "r"), ("Points per game", "r"),
+                         ("vs his season average", "r")], body))
+        st.caption("Points are rebuilt from each stat line with our league's rules for that season (they equal "
+                   "Sleeper's for about 99% of player-weeks). 'vs his season average' compares each game with his "
+                   "average that season, so a role change or the switch from full to half PPR doesn't skew it. "
+                   "A cold, windy game counts in both rows. A few games can swing a lot, so check the Games column.")
 
 # --- week by week ----------------------------------------------------------------------------
 seasons = sorted(log["season"].unique(), reverse=True)
