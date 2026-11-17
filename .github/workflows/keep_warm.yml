@@ -1,0 +1,49 @@
+# .github/workflows/keep_warm.yml
+# Phase 11: keep-warm visits (Jaden chose them, 2026-11-16).
+# Opens every page of the live app in a headless browser (python -m etl.keep_warm) so it doesn't fall asleep
+# (Streamlit Community Cloud sleeps an app after 12 hours without a visit) and every page is already cached with
+# the newest data when friends show up. Each run's summary page has a table of how long each page took.
+#
+# When: right after every "Refresh league data" run (new data -> fill the caches), and at 21:47 UTC
+# (4:47 PM Eastern; 5:47 in summer time), so the app stays awake through the evening and the night.
+# Run it by hand: Actions tab -> "Keep the app awake" -> "Run workflow".
+# No secrets needed. It only works while the app is public (anyone with the link); for a private app it
+# just leaves a warning.
+
+name: Keep the app awake
+
+on:
+  workflow_run:
+    workflows: ["Refresh league data"]
+    types: [completed]
+  schedule:
+    - cron: "47 21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keep-warm
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_URL: https://national-fantasy-league.streamlit.app
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install a headless browser
+        run: |
+          pip install "playwright>=1.48"
+          python -m playwright install --with-deps chromium
+
+      - name: Visit every page
+        run: python -m etl.keep_warm

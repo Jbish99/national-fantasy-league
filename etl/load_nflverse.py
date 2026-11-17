@@ -64,6 +64,7 @@ except ImportError:
 
 from etl.common import LoadProblem
 from etl.db import PROJECT_ROOT, get_connection
+from etl.precompute import data_changed, data_changing
 from etl.match_players import normalize
 from etl.nfl_columns import (CONTEXT_COLUMNS, GAME_COLUMNS, OPPORTUNITY_COLUMNS, SLEEPER_DEF_IDS, STAT_COLUMNS,
                              TEAM_DEFENSE_COLUMNS)
@@ -628,6 +629,7 @@ def main():
     RELOAD_ALL = bool(args.refresh or args.step)
 
     with get_connection() as conn:
+        data_changing(conn, "load_nflverse")    # Phase 11: the app stops trusting cached results + copies now
         for name, step in [("download", lambda c: download(c, mode))] + STEPS:
             if args.step and name != "download" and name not in args.step:
                 continue
@@ -650,6 +652,7 @@ def main():
                 print(f"\nStopped at '{name}'. Nothing from this step was saved. The database said:\n  {error}")
                 sys.exit(1)
 
+        data_changed(conn, "load_nflverse")     # Phase 11: new data version + rebuilt precomputed copies
         size = conn.execute(
             "select pg_size_pretty(pg_database_size(current_database())), "
             "pg_size_pretty(pg_total_relation_size('core.nfl_player_week')), "

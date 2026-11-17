@@ -9,7 +9,10 @@ Phase 6: the in-season refresh. One command runs the whole update, in order:
                                                     workbook doesn't have yet come in as provisional
   5. python -m etl.load_nflverse                    this season's NFL stats, games and weather, plus snaps,
                                                     injuries, expected points and play-by-play summaries
-  6. checks                                         the history checks in qa.summary must pass
+  6. python -m etl.precompute                       Phase 11: new data version + rebuild and check the
+                                                    precomputed copies of the heavy views (once, here: the
+                                                    steps above only stamp the version, NFL_PRECOMPUTE=later)
+  7. checks                                         the history checks in qa.summary must pass
 
 GitHub runs this every morning (.github/workflows/refresh.yml). You can also run it yourself
 from the project root:
@@ -50,6 +53,8 @@ WARN_ONLY = {
     "points_split_mismatch": "the passing/rushing/receiving split stopped adding up (Team identities only); ask Claude",
     "identity_metric_unknown": "an identity label in db/seed/001 names a measure that doesn't exist (typo?); ask Claude",
     "formation_unknown": "a formation is missing from core.formation in db/seed/001 (deleted row?); ask Claude",
+    "precomputed_problem": "a precomputed copy wasn't built or didn't match its view, so the app reads that view "
+                           "directly (slower, still correct); ask Claude",
 }
 # Known, accepted counts. custom_points_used = 2: the 2022 Fantasy Bowl (co-champions).
 EXPECTED = {"custom_points_used": 2}
@@ -149,11 +154,13 @@ def main():
 
     season = args.season or current_season()
     print(f"Refreshing the {season} season.")
+    os.environ["NFL_PRECOMPUTE"] = "later"   # the steps below only stamp the data version; copies are built once, last
     run("Build/update the database", "etl.run_sql", "--all")
     run("Pull from Sleeper", "etl.pull_sleeper", "--season", str(season))
     run("Load the workbook", "etl.load_workbook")
     run("Rebuild the clean tables", "etl.load_core")
     run("NFL stats", "etl.load_nflverse")
+    run("Precomputed copies", "etl.precompute")
     if report():
         sys.exit(1)
 

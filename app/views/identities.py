@@ -173,7 +173,7 @@ with season_tab:
         mp["top2"] = mp["top2_share"].astype(float) * 100
         mp["Team"] = mp["franchise_code"].map(city)
         mp["team_full"] = mp["franchise_code"].map(full_name)
-        mp["logo"] = [art(c, "logo", season) for c in mp["franchise_code"]]
+        mp["logo"] = [art(c, "logo", season, px=34) for c in mp["franchise_code"]]
         names = sl.set_index("franchise_code")
         mp["Scheme"] = mp["franchise_code"].map(names["style_name"])
         mp["Formation"] = [(form_by.get((season, c)) or {}).get("formation_name") or "" for c in mp["franchise_code"]]

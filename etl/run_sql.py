@@ -7,7 +7,8 @@ when it runs it, which makes `git pull` complain, and it can open an old copy by
 (DBeaver is still the place to look at the data and run your own queries.)
 
 Each file runs in its own transaction: if one fails, nothing from that file is saved
-and the run stops there.
+and the run stops there. At the end it stamps a new data version and rebuilds the precomputed
+copies of the heavy views (Phase 11, etl/precompute.py), since a view may have changed.
 
 Run from the project root:
     python -m etl.run_sql --all                         # every schema file, the checks and the seed, in order
@@ -21,6 +22,7 @@ import sys
 import psycopg
 
 from etl.db import PROJECT_ROOT, get_connection
+from etl.precompute import data_changed
 
 DB = PROJECT_ROOT / "db"
 RESET = DB / "reset_core.sql"
@@ -67,6 +69,8 @@ def main():
                 conn.rollback()
                 print(f"  FAILED {name}. Nothing from this file was saved. The database said:\n    {error}")
                 sys.exit(1)
+        # Views may have changed: new data version + rebuild the precomputed copies (Phase 11).
+        data_changed(conn, "run_sql")
         summary = conn.execute("select check_name, problems from qa.summary where problems > 0").fetchall()
     print("\nDone. " + ("Checks with something to look at: " + ", ".join(f"{c} {n}" for c, n in summary)
                         if summary else "All checks in qa.summary are zero."))

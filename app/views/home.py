@@ -34,7 +34,7 @@ rank = dict(zip(current["franchise_code"], current["regular_season_rank"]))
 page_header("National Fantasy League",
             f"{standings['season'].nunique()} seasons and {games['game_id'].nunique():,} games since 2020. "
             f"Week {latest_week} of {latest_season} is " + ("in, provisional from Sleeper." if provisional else "final."),
-            league_art("league_logo"))
+            league_art("league_logo", px=64))
 
 # --- the week's big game: Game of the Week, else the closest game ---------------------------------
 gotw = one_side[one_side["is_game_of_week"] == True]  # noqa: E712 (pandas column)
@@ -80,7 +80,7 @@ with right:
 # --- champions -------------------------------------------------------------------------------------
 section("Champions")
 cards = []
-next_logo = league_art(kind="special_logo", season=latest_season)
+next_logo = league_art(kind="special_logo", season=latest_season, px=64)
 if season_info.loc[latest_season, "status"] != "complete" and latest_season not in set(bowls["season"]):
     pic = (f'<img src="{next_logo}" alt="" style="width:64px;height:64px;object-fit:contain">' if next_logo
            else '<span style="height:64px"></span>')

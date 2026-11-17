@@ -50,6 +50,7 @@ from etl.common import (
     latest, roster_map, season_points, to_bool, to_number, winner_of, workbook_rows,
 )
 from etl.db import get_connection
+from etl.precompute import data_changed, data_changing
 
 
 # ---------------------------------------------------------------------------
@@ -875,6 +876,7 @@ def main() -> None:
     chosen = set(args.step or STEP_NAMES[STEP_NAMES.index(args.start) if args.start else 0:])
 
     with get_connection() as conn:
+        data_changing(conn, "load_core")        # Phase 11: the app stops trusting cached results + copies now
         for name, step in STEPS:
             if name not in chosen:
                 continue
@@ -901,6 +903,7 @@ def main() -> None:
                 print("Tip: run all the steps in order (no --step) so everything a step needs is already loaded.")
                 sys.exit(1)
 
+        data_changed(conn, "load_core")         # Phase 11: new data version + rebuilt precomputed copies
         try:
             summary = conn.execute("select check_name, problems from qa.summary where problems > 0").fetchall()
         except psycopg.errors.UndefinedTable:

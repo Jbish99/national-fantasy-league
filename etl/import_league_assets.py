@@ -21,6 +21,10 @@ For every row of your sheet (xlsx or csv, the template's columns) it:
   5. makes a left-facing copy of every helmet (helmet_left_<season>.png) so matchup cards can face two helmets
      at each other. It's the helmet mirrored, with the side decal flipped back so lettering still reads right
      (decal positions: data/manual/helmet_decals.csv). A helmet row of your own with facing = left wins over this.
+  6. Phase 11: saves small copies for phones next to each image, <name>_<px>.webp (logos 64/128/256 px, league
+     and special logos 128/256, helmets 336; WebP like the banners: a 336 px helmet is ~22 KB instead of ~140). The app picks the smallest one that's sharp at the size it shows
+     (app/lib.py SMALL_SIDES). Only the small copies, from the images already in the app (no sheet needed):
+         python -m etl.import_league_assets --small-copies
 Then it writes:
   - app/static/league/assets.csv           the clean list the app reads (commit it with the images)
   - data/cache/league_assets_preview.png    a contact sheet on a dark background, to look over (not committed)
@@ -55,6 +59,9 @@ BIG_FILE = 500_000      # bytes; warn above this
 TEMPLATE_NOTES = ("team colors go here", "EXAMPLE:")    # filler text from the template, dropped
 COLUMNS = ["asset_id", "franchise_code", "asset_type", "season_from", "season_to", "file_name", "background",
            "facing", "primary_color", "secondary_color", "width", "height", "source_file", "notes"]
+
+# Phase 11: small copies (longest side in px) saved as <name>_<px>.webp. Keep in step with SMALL_SIDES in app/lib.py.
+SMALL_SIDES = {"logo": (64, 128, 256), "special_logo": (128, 256), "league_logo": (128, 256), "helmet": (336,)}
 
 problems: list[str] = []        # things Jaden needs to fix in the sheet
 fixes: list[str] = []           # things this script corrected on its own
@@ -304,11 +311,55 @@ def contact_sheet(assets: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------------------------- main
+def small_copies(assets: list[dict]) -> tuple[int, int]:
+    """Save the small copies of every listed image (Phase 11). Returns (files written, KB in total)."""
+    written, total = 0, 0
+    for a in assets:
+        sides = SMALL_SIDES.get(a["asset_type"], ())
+        source = OUT_DIR / a["file_name"]
+        if not sides or not source.is_file():
+            continue
+        with Image.open(source) as image:
+            image.load()
+            for side in sides:
+                if side >= max(image.size):
+                    continue                                    # never upscale; the app falls back to the original
+                small = image.copy()
+                small.thumbnail((side, side), Image.LANCZOS)
+                target = source.with_name(f"{source.stem}_{side}.webp")
+                small.save(target, "WEBP", quality=88, method=6)    # transparency kept
+                written += 1
+                total += target.stat().st_size
+    return written, round(total / 1024)
+
+
+def read_manifest() -> list[dict]:
+    with open(MANIFEST, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Copy the league's graphics into the app at web size.")
-    parser.add_argument("sheet", help="your filled-in league_assets sheet (.xlsx or .csv)")
+    parser.add_argument("sheet", nargs="?", help="your filled-in league_assets sheet (.xlsx or .csv)")
     parser.add_argument("--look-in", help="folder to search (with subfolders) when a file isn't at its path")
+    parser.add_argument("--small-copies", action="store_true",
+                        help="only (re)make the small copies from the images already in app/static/league")
     args = parser.parse_args()
+
+    if args.small_copies:
+        if not MANIFEST.exists():
+            sys.exit(f"No {MANIFEST.relative_to(PROJECT_ROOT)} yet: run the full import with your sheet first.")
+        listed = read_manifest()
+        keep = {OUT_DIR / a["file_name"] for a in listed}
+        old = [p for p in OUT_DIR.rglob("*") if p.suffix in (".png", ".webp") and p not in keep]
+        for p in old:                                           # small copies of images no longer listed / old sizes
+            p.unlink()
+        count, kb = small_copies(listed)
+        print(f"{count} small copies written ({kb:,} KB) next to the {len(listed)} images in "
+              f"{OUT_DIR.relative_to(PROJECT_ROOT)}.")
+        return
+    if not args.sheet:
+        parser.error("name your league_assets sheet (or use --small-copies)")
 
     sheet = Path(args.sheet.strip('"'))
     if not sheet.exists():
@@ -400,6 +451,8 @@ def main():
     removed = [p for p in OUT_DIR.rglob("*") if p.suffix in (".png", ".webp") and p not in keep]
     for p in removed:
         p.unlink()
+    small, small_kb = small_copies(assets)                      # Phase 11: phone-size copies (removed above, remade)
+    removed = [p for p in removed if not (p.parent / p.name).exists()]   # don't count small copies we just remade
     with open(MANIFEST, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=COLUMNS)
         writer.writeheader()
@@ -409,6 +462,7 @@ def main():
 
     print(f"\n{len(assets)} images in app/static/league/"
           + (f" ({len(removed)} old one(s) removed)" if removed else "") + f"; list: {MANIFEST.relative_to(PROJECT_ROOT)}")
+    print(f"{small} small copies for phones ({small_kb:,} KB).")
     if assets:
         print(f"Look them over: {PREVIEW.relative_to(PROJECT_ROOT)}")
     if big:

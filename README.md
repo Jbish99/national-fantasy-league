@@ -233,8 +233,9 @@ either way. Useful in DBeaver: `core.v_trade` (one row per trade), `core.v_trade
 Checks (warn only): `qa.trade_vs_acquisitions`, `qa.traded_pick_unmatched`, `qa.replacement_level_mismatch`.
 
 Every view also works in DBeaver, e.g. `select * from core.v_lineup_week` or `core.v_draft_value`.
-Results are cached for 10 minutes, so new data shows up within that. To see it right away, open the app's
-**⋮** menu (top right) → **Clear cache**.
+Results stay cached until the data changes (Phase 11, section 13): every load stamps a new data version and the app
+checks it about once a minute, so new data shows up within a minute of a load. **⋮** menu (top right) →
+**Clear cache** still works if you ever want a fresh start.
 
 Page files live in `app/views/` (not `app/pages/`: Streamlit treats a folder named `pages` as its old
 automatic menu, which breaks direct links to a page).
@@ -328,7 +329,32 @@ Sheet rules:
 The look itself: theme in `.streamlit/config.toml` (dark, gold highlight, Archivo font served from
 `app/static/fonts/`), shared CSS and cards (matchup card, score tiles, tables) in `app/lib.py`.
 
-## 13. Timing the pages (Phase 11)
+## 13. Speed (Phase 11)
+
+How the app stays fast, without changing any history:
+- **Kept connections:** the app reuses its database connections instead of opening one per query (~0.2 s each on
+  Neon). They're replaced after 4 idle minutes, and a broken one (Neon asleep) is replaced and the query retried.
+- **Cache by data version:** `core.data_version` is a one-row stamp. `load_core`, `load_nflverse`, `run_sql` and the
+  daily refresh bump it; the app checks it about once a minute and keeps every result cached until it changes (at
+  most 24 hours). New data shows right after a load; nobody waits for the same queries twice in a day.
+- **Precomputed copies:** the slowest views (the list is `core.precomputed`, set in `db/schema/018_speed.sql`) are
+  saved as plain tables, `core.copy_<name>`, at the end of every load, and each copy is checked row for row against
+  its view. The app reads a copy only when it passed that check for the current data version; otherwise it reads
+  the view itself (slower, still correct). **The views stay the source of truth**: in DBeaver, keep using
+  `core.v_...`. After changing data by hand (DBeaver, Neon SQL editor), run `python -m etl.precompute`.
+  `python -m etl.precompute --status` lists the copies and whether the app is using them.
+  Checks: `qa.precomputed_problem` (in qa.summary, warn-only) and, on demand, `select * from
+  qa.precomputed_compare` (every copy vs its view right now; `differing_rows` should be 0).
+- **Small images:** logos and helmets also come as small WebP copies (`<name>_64.webp` etc.) and the app picks the
+  one that's sharp at the size it shows. `python -m etl.import_league_assets` makes them with every import;
+  `python -m etl.import_league_assets --small-copies` remakes only them.
+- **Keep-warm visits** (`.github/workflows/keep_warm.yml`, `etl/keep_warm.py`): right after each daily refresh and
+  at 21:47 UTC, GitHub opens every page in a headless browser, so the app doesn't fall asleep (Streamlit sleeps an
+  app after 12 hours without a visit) and every page is already cached when friends show up. Each run's summary
+  page has a table of real-browser page times. It only works while the app is public; for a private app it leaves
+  a warning and stops.
+
+Timing the pages:
 
     python -m etl.time_app
 
@@ -362,13 +388,14 @@ db/schema/           numbered SQL files, run in order
 db/checks/           validation views (qa schema): each returns only problem rows
 db/seed/             hand-maintained reference data (franchises, seasons, keeper rules, result overrides)
 db/reset_core.sql    drops core + qa for a clean rebuild (raw is kept)
-etl/                 scripts that pull from the APIs and load the database (+ setup_app_login.py, refresh.py)
+etl/                 scripts that pull from the APIs and load the database (+ setup_app_login.py, refresh.py,
+                     precompute.py, time_app.py, keep_warm.py)
 data/manual/         All-In-One.xlsx (the official league history workbook) and other hand-kept files
 data/cache/          big downloads like Sleeper /players/nfl (git-ignored)
 app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared look + helpers), views/ (one file per page),
                      static/ (league art, font, sidebar wordmark), requirements.txt (only what the deployed app needs)
 .streamlit/          config.toml (theme, static files); secrets.toml (the app's read-only login) is git-ignored
-.github/workflows/   refresh.yml: the daily refresh on GitHub
+.github/workflows/   refresh.yml: the daily refresh on GitHub; keep_warm.yml: keep-warm visits (Phase 11)
 ```
 
 ## Build phases
@@ -384,4 +411,4 @@ app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared loo
    expected points, play-by-play usage, DEF points rebuilt)
 9. Trade analyzer ✅
 10. Team identities ✅ (+ 10b formations and scouting reports)
-11. Speed-up (in progress: measuring with `etl/time_app.py`, section 13)
+11. Speed-up ✅ (section 13)

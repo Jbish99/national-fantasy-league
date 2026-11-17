@@ -17,6 +17,9 @@ import base64
 import csv
 import html as _html
 import os
+import re
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlencode
@@ -64,19 +67,139 @@ def _database_url():
     return os.getenv("DATABASE_URL") or os.getenv("DATABASE_URL_UNPOOLED")
 
 
-@st.cache_data(ttl=600, show_spinner="Loading league history...")
-def query(sql, params=None):
-    """Run a read-only query and return a DataFrame. Results are cached for 10 minutes."""
+# ---------------------------------------------------------------------------
+# Queries (Phase 11: kept connections, cache by data version, precomputed copies)
+#
+# - Connections are kept open and reused (opening one costs ~0.2 s on Neon). One that sat idle longer than
+#   IDLE_SECONDS is replaced (Neon's free plan sleeps after 5 idle minutes, which closes it); a broken one is
+#   replaced and the query tried once more.
+# - Results stay cached until the data version changes (core.data_version, stamped by every load; checked every
+#   VERSION_CHECK_SECONDS), and at most CACHE_SECONDS. Jaden, 2026-11-16: new data visible right after a refresh.
+# - Views with a precomputed copy (core.precomputed, db/schema/018) are read from the copy when it was built and
+#   checked for the current data version; otherwise from the view itself. Pages keep naming the views.
+# ---------------------------------------------------------------------------
+VERSION_CHECK_SECONDS = 60
+CACHE_SECONDS = 24 * 3600
+IDLE_SECONDS = 240
+KEEP_CONNECTIONS = 4
+
+
+def _no_database():
+    st.error("No database address found. Add DATABASE_URL to the .env file (or to Streamlit's secrets).")
+    st.stop()
+
+
+@st.cache_resource
+def _pool():
+    """Open connections waiting to be reused, shared by every visitor: [(connection, last used)]."""
+    return {"idle": [], "lock": threading.Lock()}
+
+
+def _connect():
     url = _database_url()
     if not url:
-        st.error("No database address found. Add DATABASE_URL to the .env file (or to Streamlit's secrets).")
-        st.stop()
+        _no_database()
+    # autocommit: no transaction left open between queries. prepare_threshold=None: no server-side prepared
+    # statements (Neon's pooled address shares server connections between clients).
+    conn = psycopg.connect(url, autocommit=True, prepare_threshold=None, connect_timeout=20)
+    conn.adapters.register_loader("numeric", FloatLoader)   # numbers come back as floats, not Decimals
+    return conn
+
+
+def _close(conn):
     try:
-        with psycopg.connect(url) as conn:
-            conn.adapters.register_loader("numeric", FloatLoader)   # numbers come back as floats, not Decimals
+        conn.close()
+    except Exception:
+        pass
+
+
+def _run(sql, params=None):
+    """Run one query on a kept connection and return a DataFrame (no caching here)."""
+    pool = _pool()
+    for attempt in (1, 2):
+        conn = None
+        with pool["lock"]:
+            while pool["idle"] and conn is None:
+                candidate, last_used = pool["idle"].pop()
+                if not candidate.closed and time.monotonic() - last_used < IDLE_SECONDS:
+                    conn = candidate
+                else:
+                    _close(candidate)
+        try:
+            if conn is None:
+                conn = _connect()
             cur = conn.execute(sql, params)
             columns = [c.name for c in cur.description]
-            return pd.DataFrame(cur.fetchall(), columns=columns)
+            rows = cur.fetchall()
+        except psycopg.OperationalError:
+            if conn is not None:
+                _close(conn)
+            if attempt == 2:
+                raise
+            continue                                 # the connection broke (e.g. the database slept): once more
+        except psycopg.Error:
+            _give_back(pool, conn)                   # a bad query (missing view...): the connection is fine
+            raise
+        _give_back(pool, conn)
+        return pd.DataFrame(rows, columns=columns)
+
+
+def _give_back(pool, conn):
+    if conn is None or conn.closed or conn.broken:
+        return
+    with pool["lock"]:
+        if len(pool["idle"]) < KEEP_CONNECTIONS:
+            pool["idle"].append((conn, time.monotonic()))
+            return
+    _close(conn)
+
+
+_STATE = {"checked": -1e9, "version": None, "copies": {}, "lock": threading.Lock()}
+
+
+def data_state():
+    """(data version, {view: its precomputed copy in use}), asked from the database at most every
+    VERSION_CHECK_SECONDS. Before db/schema/018 is applied: (None, {}), and results are cached in 10-minute
+    buckets (like before Phase 11) until it is."""
+    if time.monotonic() - _STATE["checked"] < VERSION_CHECK_SECONDS:
+        return _STATE["version"], _STATE["copies"]
+    with _STATE["lock"]:
+        if time.monotonic() - _STATE["checked"] >= VERSION_CHECK_SECONDS:
+            try:
+                df = _run("select v.version, p.view_name, p.copy_name from core.data_version v "
+                          "left join core.precomputed p on p.status = 'ok' and p.data_version = v.version")
+                version = int(df["version"].iloc[0]) if len(df) else None
+                copies = {r.view_name: r.copy_name for r in df.itertuples() if isinstance(r.view_name, str)}
+            except psycopg.OperationalError:          # can't reach the database: keep what we had, ask again soon
+                _STATE["checked"] = time.monotonic() - VERSION_CHECK_SECONDS + 5
+                return _STATE["version"], _STATE["copies"]
+            except psycopg.Error:                     # 018 not applied yet (right after a push)
+                version, copies = None, {}
+            if version is not None and _STATE["version"] is not None and version != _STATE["version"]:
+                _cached.clear()                       # results from the older data: drop them
+            _STATE.update(version=version, copies=copies, checked=time.monotonic())
+    return _STATE["version"], _STATE["copies"]
+
+
+def _cache_key():
+    version, _ = data_state()
+    return version if version is not None else f"t{int(time.time() // 600)}"   # no stamp yet: 10-minute buckets
+
+
+def query(sql, params=None):
+    """Run a read-only query and return a DataFrame. Cached until the data version changes (at most a day)."""
+    version, copies = data_state()
+    for view, copy in copies.items():
+        if view in sql:
+            sql = re.sub(rf"\b{re.escape(view)}\b", copy, sql)
+    return _cached(sql, params, version if version is not None else _cache_key())
+
+
+@st.cache_data(ttl=CACHE_SECONDS, max_entries=3000, show_spinner="Loading league history...")
+def _cached(sql, params, version):
+    """The cached query. version is part of the key, so a new data version means fresh results."""
+    try:
+        return _run(sql, params)
     except psycopg.OperationalError as error:
         st.error(f"Couldn't reach the database: {str(error).splitlines()[0]}")
         st.stop()
@@ -86,17 +209,22 @@ def query(sql, params=None):
 # Shared lookups
 # ---------------------------------------------------------------------------
 
-@st.cache_resource(ttl=600)
+_FRANCHISES = {"key": None, "names": None}
+
+
 def franchises():
     """franchise_code -> (full name, short name). Short names match the workbook ('Up North N').
-    Kept as one shared object (cache_resource), so looking names up is instant."""
-    df = query("select franchise_code, location, nickname from core.franchise order by location, nickname")
-    counts = df["location"].value_counts()
-    out = {}
-    for code, location, nickname in df.itertuples(index=False):
-        short = f"{location} {nickname[0]}" if counts[location] > 1 else location
-        out[code] = (f"{location} {nickname}", short)
-    return out
+    Kept in memory until the data version changes, so looking names up (once per table cell) is instant."""
+    key = _cache_key()
+    if _FRANCHISES["names"] is None or _FRANCHISES["key"] != key:
+        df = query("select franchise_code, location, nickname from core.franchise order by location, nickname")
+        counts = df["location"].value_counts()
+        out = {}
+        for code, location, nickname in df.itertuples(index=False):
+            short = f"{location} {nickname[0]}" if counts[location] > 1 else location
+            out[code] = (f"{location} {nickname}", short)
+        _FRANCHISES.update(key=key, names=out)
+    return _FRANCHISES["names"]
 
 
 def full_name(code):
@@ -113,9 +241,13 @@ def city(code):
     return name[:-2] if name.endswith((" B", " N")) and name.startswith("Up North") else name
 
 
-@st.cache_data(ttl=600, show_spinner=False)
 def team_games():
     """Every official game from each team's side (core.v_team_game), with names added."""
+    return _team_games(_cache_key())
+
+
+@st.cache_data(ttl=CACHE_SECONDS, max_entries=3, show_spinner=False)
+def _team_games(version):
     df = query(
         """
         select game_id, season, week, game_type, designation, franchise_code, team_name, opponent_code,
@@ -224,8 +356,26 @@ def _assets():
     return rows
 
 
-def art(code, kind="logo", season=None, facing=None):
+# Small copies (Phase 11): etl/import_league_assets.py also saves each image at these sizes (longest side, px) as
+# <name>_<px>.webp next to it. A 512 px logo shown at 26 px downloaded ~110 KB; its 64 px copy is ~3 KB.
+SMALL_SIDES = {"logo": (64, 128, 256), "special_logo": (128, 256), "league_logo": (128, 256), "helmet": (336,)}
+
+
+@lru_cache(maxsize=512)
+def _sized(file_name, kind, px):
+    """The smallest copy at least twice px (sharp on phone screens), else the full-size image."""
+    if px:
+        for side in SMALL_SIDES.get(kind, ()):
+            if side >= 2 * px:
+                small = f"{file_name.rsplit('.', 1)[0]}_{side}.webp"
+                if (PROJECT_ROOT / "app" / "static" / "league" / small).is_file():
+                    return small
+    return file_name
+
+
+def art(code, kind="logo", season=None, facing=None, px=None):
     """URL of a franchise's art (logo, helmet, endzone_banner...) for a season, or None.
+    px = the size it's shown at (CSS pixels): picks the small copy that fits (Phase 11).
     A season with no art of its own uses the newest art for now (Jaden, 2026-11-15); once older art is
     added to assets.csv with season ranges, those seasons pick it up automatically."""
     rows = [r for r in _assets() if r["franchise_code"] == code and r["asset_type"] == kind
@@ -235,20 +385,21 @@ def art(code, kind="logo", season=None, facing=None):
     if season is not None:
         fits = [r for r in rows if (r["season_from"] or 0) <= season <= (r["season_to"] or 9999)]
         if fits:
-            return ART_URL + max(fits, key=lambda r: r["season_from"] or 0)["file_name"]
-    return ART_URL + max(rows, key=lambda r: r["season_from"] or 0)["file_name"]
+            return ART_URL + _sized(max(fits, key=lambda r: r["season_from"] or 0)["file_name"], kind, px)
+    return ART_URL + _sized(max(rows, key=lambda r: r["season_from"] or 0)["file_name"], kind, px)
 
 
-def league_art(asset_id=None, kind=None, season=None):
-    """League-wide art: by asset_id (league_logo), or by kind for one season (special_logo for 2026)."""
+def league_art(asset_id=None, kind=None, season=None, px=None):
+    """League-wide art: by asset_id (league_logo), or by kind for one season (special_logo for 2026).
+    px = the size it's shown at: picks the small copy that fits (Phase 11)."""
     for r in _assets():
         if r["franchise_code"]:
             continue
         if asset_id and r["asset_id"] == asset_id:
-            return ART_URL + r["file_name"]
+            return ART_URL + _sized(r["file_name"], r["asset_type"], px)
         if kind and r["asset_type"] == kind and season is not None and \
                 (r["season_from"] or 0) <= season <= (r["season_to"] or 9999):
-            return ART_URL + r["file_name"]
+            return ART_URL + _sized(r["file_name"], r["asset_type"], px)
     return None
 
 
@@ -322,7 +473,7 @@ def badge(code, size=28):
 
 def logo(code, season=None, size=28, alt=""):
     """The franchise's logo as an <img>, or its plain shield when there's no art."""
-    url = art(code, "logo", season)
+    url = art(code, "logo", season, px=size)
     if not url:
         return badge(code, size)
     return f'<img class="lg" src="{url}" alt="{esc(alt)}" style="width:{size}px;height:{size}px">'
@@ -424,7 +575,7 @@ def hero(left, right, label="", sublabel="", note_left="", note_right="", winner
 
     def side(t, where):
         facing = "right" if where == "l" else "left"
-        url = art(t["code"], "helmet", t.get("season"), facing)
+        url = art(t["code"], "helmet", t.get("season"), facing, px=168)     # .helmet is 168 px wide
         pic = (f'<img class="helmet" src="{url}" alt="{esc(full_name(t["code"]))} helmet">' if url
                else f'<div class="helmet-badge">{badge(t["code"], 96)}</div>')
         return f'<div class="tm {where}">{pic}{name_block(t, where)}</div>'
@@ -548,10 +699,12 @@ def link(url, label_html):
 
 def require(view):
     """Stop the page with a short note if a view from a new SQL file isn't in the database yet.
-    (Streamlit Cloud picks up new app code on push, before `python -m etl.run_sql --all` has run.)"""
+    (Streamlit Cloud picks up new app code on push, before `python -m etl.run_sql --all` has run.)
+    Asks the catalog, which is instant (selecting from the view would compute all of it: up to 1 s on Neon)."""
     try:
-        query(f"select 1 from {view} limit 1")
-    except psycopg.Error:
+        if not bool(query("select to_regclass(%s) is not null as ok", (view,))["ok"].iloc[0]):
+            raise LookupError(view)
+    except (psycopg.Error, LookupError):
         st.info("This page needs one database update first. On your computer, from the project folder, run "
                 "`python -m etl.run_sql --all` (or start the Refresh workflow on GitHub). Then reload this page.")
         st.stop()
@@ -964,7 +1117,7 @@ def style():
     """The league look: fonts, cards, tables. Called once per run, before the page."""
     st.html(CSS)
     wordmark = PROJECT_ROOT / "app" / "static" / "brand" / "sidebar_wordmark.png"
-    shield = league_art("league_logo")
+    shield = league_art("league_logo", px=48)
     if wordmark.exists():
         st.logo(str(wordmark), size="large", icon_image=str(PROJECT_ROOT / shield) if shield else None)
 

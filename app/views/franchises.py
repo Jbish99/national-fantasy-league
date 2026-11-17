@@ -27,7 +27,7 @@ complete = query("select season from core.season where status = 'complete' or se
 
 # --- banner and name ------------------------------------------------------------------------
 banner = art(code, "endzone_banner")
-logo_url = art(code, "logo")
+logo_url = art(code, "logo", px=104)
 pic = (f'<img src="{logo_url}" alt="{esc(full_name(code))} logo" style="width:104px;height:104px;object-fit:contain">'
        if logo_url else badge(code, 92))
 titles = mine[mine["champion"]]["season"].tolist()

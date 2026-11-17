@@ -11,6 +11,9 @@ Net = value received - value given. Won = net of 1 point or more; lost = -1 or l
 Links: /trades?trade=<transaction_id> opens one trade (lib.trade_url).
 """
 
+from collections import defaultdict
+from types import SimpleNamespace
+
 import altair as alt
 import pandas as pd
 import streamlit as st
@@ -48,6 +51,27 @@ if sides.empty:
     st.stop()
 
 
+def records(df):
+    """Rows as simple objects (r.net, r.value...). Much faster to loop over than DataFrame.itertuples (Phase 11:
+    building every trade card that way took ~1.7 s per visit on the real league)."""
+    return [SimpleNamespace(**r) for r in df.to_dict("records")]
+
+
+def best_first(items):
+    """Assets in the order the cards show them: most value first (no value last), then player, pick, FAAB."""
+    items = sorted(items, key=lambda r: r.asset_type, reverse=True)
+    return sorted(items, key=lambda r: (pd.isna(r.value), 0 if pd.isna(r.value) else -r.value))
+
+
+SIDE_OF = defaultdict(dict)              # transaction_id -> {franchise_code: its side}
+for _r in records(sides):
+    SIDE_OF[_r.transaction_id][_r.franchise_code] = _r
+GOT = defaultdict(list)                  # (transaction_id, receiving team) -> assets it got, best first
+for _r in records(assets):
+    GOT[(_r.transaction_id, _r.receiver_code)].append(_r)
+GOT = defaultdict(list, {k: best_first(v) for k, v in GOT.items()})
+
+
 # ---------------------------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------------------------
@@ -59,15 +83,18 @@ def tight(table_html):
 
 def trade_table(s):
     """One row per trade from the per-team sides: teams (best net first), winner, margin, still counting."""
-    rows = []
-    for tid, g in s.groupby("transaction_id"):
-        g = g.sort_values(["net", "franchise_code"], ascending=[False, True])
-        top = g.iloc[0]
-        rows.append({"transaction_id": tid, "season": int(top.season), "week": int(top.week),
-                     "created_at": top.created_at, "teams": list(g["franchise_code"]),
-                     "winner": top.franchise_code if top.net >= EVEN else None, "margin": float(top.net),
-                     "total": float(g["value_received"].sum()), "still": bool(g["still_counting"].any())})
-    return pd.DataFrame(rows)
+    s = s.sort_values(["transaction_id", "net", "franchise_code"], ascending=[True, False, True])
+    g = s.groupby("transaction_id", sort=True)
+    top = g.head(1).set_index("transaction_id")
+    out = pd.DataFrame({
+        "transaction_id": top.index, "season": top["season"].astype(int).to_numpy(),
+        "week": top["week"].astype(int).to_numpy(), "created_at": top["created_at"].to_numpy(),
+        "teams": g["franchise_code"].agg(list).reindex(top.index).to_numpy(),
+        "winner": [c if n >= EVEN else None for c, n in zip(top["franchise_code"], top["net"])],
+        "margin": top["net"].astype(float).to_numpy(),
+        "total": g["value_received"].sum().reindex(top.index).astype(float).to_numpy(),
+        "still": g["still_counting"].any().reindex(top.index).astype(bool).to_numpy()})
+    return out.reset_index(drop=True)
 
 
 def winner(t):
@@ -137,8 +164,8 @@ def asset_item(r):
 
 
 def side_html(row, got, won):
-    items = "".join(asset_item(r) for r in got.sort_values(["value", "asset_type"], ascending=[False, False])
-                    .itertuples()) or '<li><span class="muted">Nothing</span><span></span></li>'
+    """One team's column of a trade. got: the assets it received, best first (GOT[...])."""
+    items = "".join(asset_item(r) for r in got) or '<li><span class="muted">Nothing</span><span></span></li>'
     return (f'<div class="trade-side{" won" if won else ""}"><div class="ts-top">'
             f'{team(row.franchise_code, int(row.season))}'
             f'<div class="ts-val"><b>{num(row.value_received)}</b><span>value received</span></div></div>'
@@ -158,10 +185,7 @@ def verdict(t):
 
 def trade_card(t):
     tid = t["transaction_id"]
-    s = sides[sides["transaction_id"] == tid].set_index("franchise_code").loc[t["teams"]].reset_index()
-    a = assets[assets["transaction_id"] == tid]
-    cols = "".join(side_html(r, a[a["receiver_code"] == r.franchise_code], r.franchise_code == winner(t))
-                   for r in s.itertuples())
+    cols = "".join(side_html(SIDE_OF[tid][code], GOT[(tid, code)], code == winner(t)) for code in t["teams"])
     return (f'<article class="trade"><div class="trade-head"><span class="th-l"><strong style="color:{TEXT}">'
             f'{t["season"]} · Week {t["week"]}</strong><span>{esc(date_text(t["created_at"]))}</span></span>'
             f'<span class="th-r">{verdict(t)}{link(trade_url(tid), "Details")}</span></div>'
@@ -228,7 +252,7 @@ if wanted and wanted in set(trades["transaction_id"]):
                                   "numbers can still move." if t["still"] else ""))
 
     section("What each team got")
-    html(f'<div class="trade-sides">{"".join(side_html(r, a[a["receiver_code"] == r.franchise_code], r.franchise_code == winner(t)) for r in s.itertuples())}</div>')
+    html(f'<div class="trade-sides">{"".join(side_html(r, GOT[(wanted, r.franchise_code)], r.franchise_code == winner(t)) for r in s.itertuples())}</div>')
 
     weeks = query(
         """
@@ -362,10 +386,10 @@ with list_tab:
         first = 15
         html('<div style="display:flex;flex-direction:column;gap:12px">'
              + "".join(trade_card(t) for t in shown.head(first).to_dict("records")) + "</div>")
-        if len(shown) > first:
-            with st.expander(f"Show the other {len(shown) - first} trades"):
-                html('<div style="display:flex;flex-direction:column;gap:12px">'
-                     + "".join(trade_card(t) for t in shown.iloc[first:].to_dict("records")) + "</div>")
+        # The rest only when asked (Phase 11): sending every card made this page ~500 KB for a phone.
+        if len(shown) > first and st.toggle(f"Show the other {len(shown) - first} trades"):
+            html('<div style="display:flex;flex-direction:column;gap:12px">'
+                 + "".join(trade_card(t) for t in shown.iloc[first:].to_dict("records")) + "</div>")
         st.caption("Value received = points over a replacement-level starter at the same position, in the weeks the "
                    "team started what it got (regular season + playoff games), until each player left that roster "
                    "(kept seasons included). 'Still counting' = a player is still on that roster or a pick is still "
@@ -386,10 +410,12 @@ def pair_net(a_, b_):
     return float(flow.get((a_, b_), 0.0)) - float(flow.get((b_, a_), 0.0))
 
 
+TEAMS_IN = dict(zip(trades["transaction_id"], trades["teams"]))   # transaction_id -> its teams
+
+
 def trade_ref(row):
     """'+180.8 vs SDP, 2022' as a link to the trade. row: a v_trade_side row as a dict."""
-    partners = [c for c in tf.loc[tf["transaction_id"] == row["transaction_id"], "teams"].iloc[0]
-                if c != row["franchise_code"]]
+    partners = [c for c in TEAMS_IN[row["transaction_id"]] if c != row["franchise_code"]]
     return (link(trade_url(row["transaction_id"]), signed(row["net"], 1))
             + f' <span class="muted small">vs {esc(" / ".join(city(c) for c in partners))}, {int(row["season"])}</span>')
 
@@ -483,9 +509,8 @@ with time_tab:
         dots["When"] = pd.to_datetime(dots["created_at"], utc=True).dt.tz_localize(None)
         dots["Team"] = dots["franchise_code"].map(short_name)
         dots["team_full"] = dots["franchise_code"].map(full_name)
-        dots["partners"] = [" / ".join(full_name(c) for c in tf.loc[tf["transaction_id"] == r.transaction_id,
-                                                                     "teams"].iloc[0] if c != r.franchise_code)
-                            for r in dots.itertuples()]
+        dots["partners"] = [" / ".join(full_name(c) for c in TEAMS_IN[tid] if c != code)
+                            for tid, code in zip(dots["transaction_id"], dots["franchise_code"])]
         dots["url"] = dots["transaction_id"].map(trade_url)
         dots["Result"] = dots["result"].str.capitalize()
         dots["size"] = dots["net"].abs()

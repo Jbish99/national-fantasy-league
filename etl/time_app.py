@@ -235,6 +235,18 @@ def problems_of(at):
     return found
 
 
+def reset_app_memory():
+    """Forget what app/lib.py keeps in memory besides Streamlit's caches (Phase 11: the data version it last
+    read, the franchise names), so a cold run really starts cold. Works with older lib.py versions too."""
+    import lib
+    state = getattr(lib, "_STATE", None)
+    if isinstance(state, dict):
+        state.update(checked=-1e9, version=None, copies={})
+    names = getattr(lib, "_FRANCHISES", None)
+    if isinstance(names, dict):
+        names.update(key=None, names=None)
+
+
 def time_page(page, url, repeat):
     import streamlit as st
     from streamlit.testing.v1 import AppTest
@@ -243,7 +255,8 @@ def time_page(page, url, repeat):
     at = None
     for i in range(repeat):
         st.cache_data.clear()
-        st.cache_resource.clear()
+        st.cache_resource.clear()            # also drops the app's kept connections (Phase 11)
+        reset_app_memory()
         at = AppTest.from_string(script, default_timeout=PAGE_TIMEOUT)
         at.secrets["DATABASE_URL"] = url
         for key, value in page.params.items():

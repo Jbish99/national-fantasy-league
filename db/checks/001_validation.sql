@@ -695,6 +695,38 @@ comment on view qa.official_vs_sleeper_scores is 'Info, not errors: games where 
 
 
 -- ---------------------------------------------------------------------
+-- Phase 11: precomputed copies of the heavy views (db/schema/018_speed.sql, etl/precompute.py)
+-- ---------------------------------------------------------------------
+-- Warn-only: a copy that couldn't be built, or didn't match its view row for row when it was built.
+-- The app never uses such a copy (it reads the view itself: slower, still correct).
+create or replace view qa.precomputed_problem as
+select view_name, copy_name, status, data_version, built_at
+from core.precomputed
+where status <> 'ok'
+order by sort_order;
+
+comment on view qa.precomputed_problem is
+    'Phase 11 (warn-only): precomputed copies not built or not equal to their view at build time; the app reads '
+    'the view instead. Rebuild with: python -m etl.precompute';
+
+-- On demand, NOT in qa.summary (it computes every heavy view): compares each copy with its view row for row
+-- right now. differing_rows must be 0 for every copy the app is using (in_use).
+create or replace view qa.precomputed_compare as
+select p.view_name, p.copy_name, p.status,
+       p.status = 'ok' and p.data_version = v.version as in_use,
+       p.row_count, p.built_at, p.build_seconds,
+       case when to_regclass(p.view_name) is not null and to_regclass(p.copy_name) is not null
+            then core.copy_differences(to_regclass(p.view_name), to_regclass(p.copy_name)) end as differing_rows
+from core.precomputed p
+cross join core.data_version v
+order by p.sort_order;
+
+comment on view qa.precomputed_compare is
+    'Phase 11, on demand: each precomputed copy compared with its view right now (differing_rows should be 0 '
+    'wherever in_use). Slow: it computes every heavy view.';
+
+
+-- ---------------------------------------------------------------------
 -- Summary: one row per check with its problem count. All zeros = healthy.
 -- ---------------------------------------------------------------------
 create or replace view qa.summary as
@@ -729,6 +761,7 @@ union all select 'traded_pick_unmatched',               count(*) from qa.traded_
 union all select 'replacement_level_mismatch',          count(*) from qa.replacement_level_mismatch
 union all select 'points_split_mismatch',               count(*) from qa.points_split_mismatch
 union all select 'identity_metric_unknown',             count(*) from qa.identity_metric_unknown
-union all select 'formation_unknown',                   count(*) from qa.formation_unknown;
+union all select 'formation_unknown',                   count(*) from qa.formation_unknown
+union all select 'precomputed_problem',                 count(*) from qa.precomputed_problem;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';
