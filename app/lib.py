@@ -525,12 +525,20 @@ def identity_evidence(label, value, league_avg):
     return template.format(value=identity_value(value, fmt), avg=identity_value(league_avg, fmt))
 
 
-def identity_row(kind, name, evidence="", fallback=False):
-    """One 'STYLE  Air-Raid / why' row for an identity card."""
+def identity_row(kind, name, evidence="", fallback=False, hover=""):
+    """One 'SCHEME  Air-Raid / why' row for an identity card. hover = text shown when pointing at the name."""
     cls = "id-name fb" if fallback else "id-name"
     why = f'<div class="id-ev">{esc(evidence)}</div>' if evidence else ""
-    return (f'<div class="id-row"><span class="id-kind">{esc(kind)}</span><div><div class="{cls}">{esc(name)}</div>'
-            f'{why}</div></div>')
+    tip = f' title="{esc(hover)}"' if hover else ""
+    return (f'<div class="id-row"><span class="id-kind">{esc(kind)}</span><div><div class="{cls}"{tip}>{esc(name)}'
+            f'</div>{why}</div></div>')
+
+
+def story_block(text, title="Scouting report"):
+    """A write-up under an identity card's labels (Phase 10b). text is plain text from app/story.py."""
+    if not text:
+        return ""
+    return f'<div class="id-story"><span class="id-kind">{esc(title)}</span><p>{esc(text)}</p></div>'
 
 
 def link(url, label_html):
@@ -823,7 +831,10 @@ tr.cut td {{ padding: 0 !important; border-bottom: 0 !important; }}
 .idcard .id-top {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }}
 .idcard .id-top .muted {{ font-size: 12.5px; white-space: nowrap; }}
 .idcard .tc, .idcard .tc span {{ white-space: normal; }}
-.id-row {{ display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 4px 0; }}
+.id-row {{ display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 3px 0; }}
+.id-name[title] {{ cursor: help; }}
+.id-story {{ margin-top: 10px; border-top: 1px solid #1E283C; padding-top: 9px; }}
+.id-story p {{ margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: #C3CBD8; }}
 .id-kind {{ font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: {MUTED}; }}
 .id-name {{ font-weight: 800; font-size: 20px; line-height: 1.1; font-variation-settings: 'wdth' 68; color: {ACCENT}; }}
 .id-name.fb {{ color: #C3CBD8; font-weight: 600; }}

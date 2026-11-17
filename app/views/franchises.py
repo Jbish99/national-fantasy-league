@@ -11,7 +11,8 @@ import streamlit as st
 
 from lib import (CONTEXT_GRAY, SERIES_BLUE, TEXT_SECONDARY, art, badge, chip, esc, footer, full_name, game_label,
                  html, html_table, identity_evidence, identity_row, link, ordinal, pts, query, record, section,
-                 show_chart, stat_strip, table, team, team_games, text)
+                 show_chart, stat_strip, story_block, table, team, team_games, text)
+from story import formation_mix, franchise_book, season_report
 
 alltime = query("select * from core.v_all_time_standings order by franchise")
 info_all = query("select franchise_code, home_city, founded_season, final_season from core.franchise").set_index("franchise_code")
@@ -75,15 +76,30 @@ for r in mine.sort_values("season", ascending=False).itertuples():
 html(html_table([("Season", "l"), ("Team name", "l"), ("Record", "r"), ("Points for", "r"), ("Per game", "r"),
                  ("Reg. season", "r"), ("Finish", "l")], rows))
 
-# --- identity (Phase 10): all-time label + every season's style and build -----------------------
+# --- identity (Phase 10 + 10b): all-time + every season's scheme, formation, front office and scouting report ---
 try:
     ids = query("select * from core.v_team_identity where franchise_code = %s order by season desc", (code,))
     ids_all = query("select * from core.v_franchise_identity where franchise_code = %s", (code,))
     labels_def = {r["identity_code"]: r for r in query("select * from core.identity").to_dict("records")}
+    league_metrics = query("select * from core.v_team_metric")
 except psycopg.Error:
     ids = None                     # 016 not applied yet (run `python -m etl.run_sql --all`)
+try:                               # Phase 10b (017): formations + the players the reports name
+    forms = {r["season"]: r for r in query("select * from core.v_team_formation where franchise_code = %s",
+                                           (code,)).to_dict("records")}
+    form_all = query("select * from core.v_franchise_formation where franchise_code = %s", (code,))
+    form_all = form_all.iloc[0].to_dict() if not form_all.empty else None
+    form_defs = query("select * from core.formation order by sort_order")
+    form_names = dict(zip(form_defs["formation_code"], form_defs["name"]))
+    flex_sets = dict(zip(form_defs["formation_code"], form_defs["flex_set"]))
+    my_players = query("select * from core.v_team_player_season where franchise_code = %s", (code,))
+except psycopg.Error:
+    forms, form_all, form_names, flex_sets, my_players = {}, None, {}, {}, pd.DataFrame()
 if ids is not None and not ids.empty:
-    section("Identity", "Style = how it scored, build = how the roster was put together (2021 on)")
+    section("Identity", "Scheme = how it scored, formation = how it lined up, front office = how the roster was "
+                        "built (2021 on)")
+    champs = standings[standings["champion"].fillna(False).astype(bool)].groupby("season").size()
+    co_champion_seasons = set(champs[champs > 1].index)
 
     def _why(code_, value, avg):
         label = labels_def.get(code_)
@@ -97,21 +113,44 @@ if ids is not None and not ids.empty:
         label = labels_def.get(code_)
         return label is None or label["metric"] is None or pd.isna(label["metric"])
 
+    def _formation(form):
+        if not form or not isinstance(form.get("formation_name"), str):
+            return ""
+        if form.get("is_fallback"):
+            hover = "No formation in more than half its weeks: " + formation_mix(form, form_names)
+        else:
+            flex = flex_sets.get(form["formation_code"])
+            hover = (f"{int(form['top_weeks'])} of {int(form['weeks_counted'])} weeks"
+                     + (f" · {flex} in the FLEX" if isinstance(flex, str) else ""))
+        return identity_row("Formation", form["formation_name"], "", bool(form.get("is_fallback")), hover)
+
     cards = []
     if not ids_all.empty and ids_all["seasons"].iloc[0] >= 2:
         a = ids_all.iloc[0]
+        book = franchise_book(a.to_dict(), form_all, my_players, labels_def)
         cards.append(f'<div class="idcard"><div class="id-top"><strong>All-time</strong><span class="muted">'
                      f'{int(a["seasons"])} seasons · {link("identities", "How labels work")}</span></div>'
-                     + identity_row("Style", a["style_name"], "", _fallback(a["style_code"]))
-                     + identity_row("Build", a["build_name"], "", _fallback(a["build_code"])) + "</div>")
+                     + identity_row("Scheme", a["style_name"], "", _fallback(a["style_code"]))
+                     + _formation(form_all)
+                     + identity_row("Front office", a["build_name"], "", _fallback(a["build_code"]))
+                     + story_block(book, "The book on them") + "</div>")
+    by_season = mine.set_index("season")
     for r in ids.itertuples():
         note = "" if r.season_complete else "so far"
+        st_row = by_season.loc[r.season].to_dict() if r.season in by_season.index else {}
+        st_row["season_complete"] = r.season_complete
+        report = season_report(r._asdict(), forms.get(r.season),
+                               my_players[my_players["season"] == r.season] if not my_players.empty else my_players,
+                               st_row, league_metrics[league_metrics["season"] == r.season], labels_def, form_names,
+                               co_champion=r.season in co_champion_seasons)
         cards.append(f'<div class="idcard"><div class="id-top"><span class="yr">{r.season}</span>'
                      f'<span class="muted">{note}</span></div>'
-                     + identity_row("Style", r.style_name, _why(r.style_code, r.style_value, r.style_league_avg),
-                                    _fallback(r.style_code))
-                     + identity_row("Build", r.build_name, _why(r.build_code, r.build_value, r.build_league_avg),
-                                    _fallback(r.build_code)) + "</div>")
+                     + identity_row("Scheme", r.style_name, "", _fallback(r.style_code),
+                                    _why(r.style_code, r.style_value, r.style_league_avg))
+                     + _formation(forms.get(r.season))
+                     + identity_row("Front office", r.build_name, "", _fallback(r.build_code),
+                                    _why(r.build_code, r.build_value, r.build_league_avg))
+                     + story_block(report) + "</div>")
     html(f'<div class="idgrid">{"".join(cards[:3])}</div>')     # all-time + the 2 newest seasons: one row
     if len(cards) > 3:
         with st.expander("Earlier seasons"):

@@ -49,6 +49,7 @@ WARN_ONLY = {
     "replacement_level_mismatch": "trade and draft replacement levels disagree (Trade Analyzer only); ask Claude",
     "points_split_mismatch": "the passing/rushing/receiving split stopped adding up (Team identities only); ask Claude",
     "identity_metric_unknown": "an identity label in db/seed/001 names a measure that doesn't exist (typo?); ask Claude",
+    "formation_unknown": "a formation is missing from core.formation in db/seed/001 (deleted row?); ask Claude",
 }
 # Known, accepted counts. custom_points_used = 2: the 2022 Fantasy Bowl (co-champions).
 EXPECTED = {"custom_points_used": 2}

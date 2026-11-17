@@ -2,8 +2,9 @@
 -- db/seed/001_reference_data.sql
 -- Hand-maintained reference data: franchises, seasons (and whose scores
 -- are official each year), keeper rules, the 2020 teams, which Sleeper
--- roster_id belongs to which franchise, official-result overrides, and the
--- team identity labels (Phase 10; rename them in the last section).
+-- roster_id belongs to which franchise, official-result overrides, the
+-- team identity labels and the formations (Phases 10 / 10b; rename them in the
+-- last two sections).
 --
 -- Safe to re-run: upserts on natural keys. Edit this file and re-run
 -- whenever the brand registry, rules or overrides change.
@@ -146,8 +147,9 @@ on conflict (game_id) do update set
 
 
 -- ---------------------------------------------------------------------
--- Team identities (Phase 10, Jaden 2026-11-16). One style label (how a team
--- scored) + one build label (how its roster was put together) per team-season.
+-- Team identities (Phase 10, Jaden 2026-11-16; football names + voice Phase 10b).
+-- One scheme label (kind 'style': how a team scored) + one front-office label
+-- (kind 'build': how its roster was put together) per team-season.
 -- RENAME A LABEL HERE (name / description / evidence), then run
 -- `python -m etl.run_sql --all` (the daily refresh does it too).
 --   metric     the measure behind it (core.v_team_metric)
@@ -156,60 +158,64 @@ on conflict (game_id) do update set
 --              a team must be (1.0 = "clearly stands out"); the all-time label uses
 --              the average over a franchise's seasons, with its own bar (min_alltime_z,
 --              0.5 by default, set in db/schema/016)
---   min_value  optional: the value must also reach this (Trade Shark / Waiver Wire
+--   min_value  optional: the value must also reach this (Wheeler-Dealer / Waiver Wire
 --              Warrior: at least 10% of the starters' points from that source)
---   evidence   the sentence on the page; {value} and {avg} are filled in using
---              value_format (pct, pct_inverse = 1 - value, years, points)
+--   evidence   the fact sentence (hover a label); {value} and {avg} are filled in
+--              using value_format (pct, pct_inverse = 1 - value, years, points)
+-- The codes (air_raid, steady_eddie, ...) never change: the scouting reports in
+-- app/story.py are keyed by them. Renamed 2026-11-16 (Phase 10b): steady_eddie ->
+-- Ball Control, boom_or_bust -> Big-Play Offense, draft_purist -> Draft and Develop,
+-- keeper_core -> Franchise Tag, trade_shark -> Wheeler-Dealer.
 -- The row of each kind with no metric is the fallback when nothing stands out.
 -- To remove a label, delete its row in the database too (an upsert never deletes).
 -- ---------------------------------------------------------------------
 insert into core.identity (identity_code, name, kind, metric, direction, min_z, min_value, description, evidence, value_format, sort_order) values
     ('air_raid',            'Air-Raid',            'style', 'ground_share',  -1, 1.0, null,
-        'More of its points came through the air (passing and catches) than the rest of the league.',
+        'Spread it out and let it fly: more of its points came through the air (passing and catching) than the rest of the league.',
         '{value} of its offense through the air (league {avg})', 'pct_inverse', 1),
     ('ground_and_pound',    'Ground and Pound',    'style', 'ground_share',   1, 1.0, null,
-        'More of its points came on the ground than the rest of the league.',
+        'Three yards and a cloud of dust: more of its points came on the ground than the rest of the league.',
         '{value} of its offense on the ground (league {avg})', 'pct', 2),
     ('gunslinger',          'Gunslinger',          'style', 'qb_share',       1, 1.0, null,
-        'Its quarterback carried more of the scoring than anyone else''s.',
+        'The quarterback had the keys: its QB carried far more of the scoring than the league''s typical QB.',
         'QB scored {value} of its points (league {avg})', 'pct', 3),
     ('stars_and_scrubs',    'Stars & Scrubs',      'style', 'top2_share',     1, 1.0, null,
-        'Two stars scored a big share of the points.',
+        'Two stars and a cast of role players: its top 2 starters scored a big share of the points.',
         'Top 2 starters scored {value} of its points (league {avg})', 'pct', 4),
     ('balanced_attack',     'Balanced Attack',     'style', 'top2_share',    -1, 1.0, null,
-        'Points came from all over the lineup, not from a couple of stars.',
+        'Everybody eats: points came from all over the lineup, not from a couple of stars.',
         'Top 2 starters scored just {value} of its points (league {avg})', 'pct', 5),
-    ('steady_eddie',        'Steady Eddie',        'style', 'score_cv',      -1, 1.0, null,
-        'The steadiest weekly scores in the league: you knew what you were getting.',
+    ('steady_eddie',        'Ball Control',        'style', 'score_cv',      -1, 1.0, null,
+        'Grind it out and win the week: some of the steadiest weekly scores in the league.',
         'Weekly scores swung ±{value} around its average (league ±{avg})', 'pct', 6),
-    ('boom_or_bust',        'Boom or Bust',        'style', 'score_cv',       1, 1.0, null,
-        'Huge weeks and duds: the widest swings in the league.',
+    ('boom_or_bust',        'Big-Play Offense',    'style', 'score_cv',       1, 1.0, null,
+        'Live by the big play: huge weeks and duds, some of the widest weekly swings in the league.',
         'Weekly scores swung ±{value} around its average (league ±{avg})', 'pct', 7),
     ('well_rounded',        'Well-Rounded',        'style', null,          null, 1.0, null,
-        'No one way of scoring stood out from the rest of the league.', null, null, 8),
-    ('draft_purist',        'Draft Purist',        'build', 'drafted_share',  1, 1.0, null,
-        'Won with players from that year''s draft.',
+        'No one trick on offense: nothing about how it scored stood out from the rest of the league.', null, null, 8),
+    ('draft_purist',        'Draft and Develop',   'build', 'drafted_share',  1, 1.0, null,
+        'Built through the draft: more of its points came from that year''s draft class than the rest of the league.',
         '{value} of its points from that year''s draft (league {avg})', 'pct', 11),
-    ('keeper_core',         'Keeper Core',         'build', 'kept_share',     1, 1.0, null,
-        'Its keepers did the heavy lifting.',
+    ('keeper_core',         'Franchise Tag',       'build', 'kept_share',     1, 1.0, null,
+        'Kept the core together: its keepers did the heavy lifting.',
         '{value} of its points from keepers (league {avg})', 'pct', 12),
-    ('trade_shark',         'Trade Shark',         'build', 'trade_share',    1, 1.0, 0.10,
-        'Built the lineup through trades.',
+    ('trade_shark',         'Wheeler-Dealer',      'build', 'trade_share',    1, 1.0, 0.10,
+        'Always working the phones: built the lineup through trades.',
         '{value} of its points from players it traded for (league {avg})', 'pct', 13),
     ('waiver_wire_warrior', 'Waiver Wire Warrior', 'build', 'pickup_share',   1, 1.0, 0.10,
-        'Lived on the waiver wire and free agency.',
+        'Found gold on the waiver wire: pickups and free agents carried the lineup.',
         '{value} of its points from pickups (league {avg})', 'pct', 14),
     ('youth_movement',      'Youth Movement',      'build', 'avg_age',       -1, 1.0, null,
-        'One of the youngest starting lineups in the league.',
+        'Young legs everywhere: one of the youngest starting lineups in the league.',
         'Starters averaged {value} old (league {avg})', 'years', 15),
     ('old_guard',           'Old Guard',           'build', 'avg_age',        1, 1.0, null,
-        'Veterans everywhere in the starting lineup.',
+        'Win-now veterans: one of the oldest starting lineups in the league.',
         'Starters averaged {value} old (league {avg})', 'years', 16),
     ('deep_bench',          'Deep Bench',          'build', 'bench_ppw',      1, 1.0, null,
-        'Plenty of points sitting on the bench every week.',
+        'Depth for days: plenty of points sitting on the bench every week.',
         '{value} bench points a week (league {avg})', 'points', 17),
     ('mixed_build',         'Mixed Build',         'build', null,          null, 1.0, null,
-        'No one way of building the roster stood out from the rest of the league.', null, null, 18)
+        'No one blueprint: the draft, keepers, trades and pickups all chipped in.', null, null, 18)
 on conflict (identity_code) do update set
     name         = excluded.name,
     kind         = excluded.kind,
@@ -221,3 +227,31 @@ on conflict (identity_code) do update set
     evidence     = excluded.evidence,
     value_format = excluded.value_format,
     sort_order   = excluded.sort_order;
+
+
+-- ---------------------------------------------------------------------
+-- Formations (Phase 10b, Jaden 2026-11-16): named after what a team put in its
+-- 2 FLEX spots each week (rule in db/schema/017). A team's base formation is the
+-- one it lined up in for more than half its counted weeks, else the fallback.
+-- RENAME HERE (name / flex_set / description); the codes are fixed by the rule
+-- in core.v_team_week_formation, so keep them.
+-- ---------------------------------------------------------------------
+insert into core.formation (formation_code, name, flex_set, description, sort_order, is_fallback) values
+    ('four_wide', 'Four-Wide Spread', 'WR + WR',
+        'Spread the field: wide receivers in both FLEX spots, four wideouts in all.', 1, false),
+    ('pro_set',   'Pro Set',          'RB + WR',
+        'The classic balanced look: a running back and a wide receiver in the FLEX.', 2, false),
+    ('power_i',   'Power I',          'RB + RB',
+        'Line up and run it: running backs in both FLEX spots, four backs in all.', 3, false),
+    ('heavy_set', 'Heavy Set',        'TE + RB or WR',
+        'Bring in the big boys: a second tight end on the field in one FLEX spot.', 4, false),
+    ('jumbo',     'Jumbo',            'TE + TE',
+        'Goal-line package: tight ends in both FLEX spots, three in all.', 5, false),
+    ('multiple',  'Multiple',         null,
+        'No base set: never lined up the same way in more than half its weeks. Kept defenses guessing.', 6, true)
+on conflict (formation_code) do update set
+    name        = excluded.name,
+    flex_set    = excluded.flex_set,
+    description = excluded.description,
+    sort_order  = excluded.sort_order,
+    is_fallback = excluded.is_fallback;

@@ -15,12 +15,17 @@ from pathlib import Path
 import streamlit as st
 
 import lib
+import story
 
-# A running app re-reads the page files after a push, but keeps the lib.py it loaded first in memory.
+# A running app re-reads the page files after a push, but keeps the helper modules it loaded first in memory.
 # A page that imports something new from lib.py then fails with ImportError until the app restarts
-# (seen on Streamlit Cloud 2026-11-16). So: reload lib.py whenever the file on disk is newer.
-if getattr(lib, "LOADED_MTIME", None) != Path(lib.__file__).stat().st_mtime:
-    importlib.reload(lib)
+# (seen on Streamlit Cloud 2026-11-16). So: reload a helper whenever its file on disk is newer. lib goes first,
+# and story (which imports from lib) is reloaded whenever lib is.
+_reloaded = False
+for _module in (lib, story):
+    if _reloaded or getattr(_module, "LOADED_MTIME", None) != Path(_module.__file__).stat().st_mtime:
+        importlib.reload(_module)
+        _reloaded = True
 
 from lib import PROJECT_ROOT, style  # noqa: E402  (after the reload, so these are the current versions)
 

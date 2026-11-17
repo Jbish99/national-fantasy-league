@@ -582,6 +582,21 @@ where i.metric is not null
 comment on view qa.identity_metric_unknown is 'Identity labels whose metric doesn''t exist in core.v_team_metric.';
 
 
+-- Phase 10b: a formation the FLEX rule produces (db/schema/017) with no row in core.formation, or no
+-- fallback ("Multiple") row (a row deleted from db/seed/001?). Should be empty.
+create or replace view qa.formation_unknown as
+select distinct w.formation_code, 'no row in core.formation' as problem
+from core.v_team_week_formation w
+where w.formation_code is not null
+  and not exists (select 1 from core.formation f where f.formation_code = w.formation_code)
+union all
+select null, 'no fallback formation (is_fallback)'
+where not exists (select 1 from core.formation where is_fallback)
+  and exists (select 1 from core.v_team_week_formation);
+
+comment on view qa.formation_unknown is 'Formations missing from core.formation (names come from db/seed/001).';
+
+
 -- Not a problem list: how much of each season's starting lineups the identity measures can see.
 create or replace view qa.identity_coverage as
 select season,
@@ -713,6 +728,7 @@ union all select 'trade_vs_acquisitions',               count(*) from qa.trade_v
 union all select 'traded_pick_unmatched',               count(*) from qa.traded_pick_unmatched
 union all select 'replacement_level_mismatch',          count(*) from qa.replacement_level_mismatch
 union all select 'points_split_mismatch',               count(*) from qa.points_split_mismatch
-union all select 'identity_metric_unknown',             count(*) from qa.identity_metric_unknown;
+union all select 'identity_metric_unknown',             count(*) from qa.identity_metric_unknown
+union all select 'formation_unknown',                   count(*) from qa.formation_unknown;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';

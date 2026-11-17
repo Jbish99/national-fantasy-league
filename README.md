@@ -194,22 +194,34 @@ Pages, in two sidebar sections:
   Waivers & FAAB (best pickups, FAAB spending),
   Draft (each pick vs a replacement-level player at his position, compared with its round), Positions
   (starters' points per week by position vs the league average, plus weather by position), Team identities
-  (Phase 10: a style + build label for every team-season, a league style map, all-time identities; also on each
-  Franchise page). These read `db/schema/009_insight_views.sql` (weather: `013_weather_splits.sql`; injuries,
-  expected points and DEF rebuild: `014_nfl_extras.sql`; trades: `015_trade_analyzer.sql`; identities:
-  `016_team_identities.sql`).
+  (Phases 10 + 10b: a scheme, formation and front-office label plus a scouting report for every team-season, a
+  league style map, all-time identities; also on each Franchise page). These read
+  `db/schema/009_insight_views.sql` (weather: `013_weather_splits.sql`; injuries, expected points and DEF rebuild:
+  `014_nfl_extras.sql`; trades: `015_trade_analyzer.sql`; identities: `016_team_identities.sql`; formations and
+  scouting-report facts: `017_team_story.sql`).
 
-**How team identities work** (`db/schema/016_team_identities.sql`): every team-season from 2021 (regular season,
-starters only) gets a *style* label (how it scored: Air-Raid, Ground and Pound, Gunslinger, Stars & Scrubs, Balanced
-Attack, Steady Eddie, Boom or Bust) and a *build* label (how the roster was put together: Draft Purist, Keeper Core,
-Trade Shark, Waiver Wire Warrior, Youth Movement, Old Guard, Deep Bench). A team earns a label when it is at least
-1 standard deviation from that season's league average on the label's measure (Trade Shark and Waiver Wire Warrior
-also need 10% of the points from that source); the strongest wins, else Well-Rounded / Mixed Build. All-time = the
-label a franchise leaned toward most on average over 2+ seasons (at least 0.5 standard deviations).
-**To rename a label or change a threshold**, edit the "Team identities" section at the end of
-`db/seed/001_reference_data.sql`, then run `python -m etl.run_sql --all`. Useful in DBeaver: `core.v_team_identity`,
-`core.v_team_profile` (the measures), `core.v_team_identity_score` (every label's score),
-`core.v_franchise_identity`, `qa.identity_coverage` (birth dates / stat lines behind the measures).
+**How team identities work** (`db/schema/016_team_identities.sql`, `017_team_story.sql`): every team-season from
+2021 (regular season, starters only) gets three labels, in football terms because the league uses them for
+storytelling and roleplay:
+- a *scheme* (how it scored: Air-Raid, Ground and Pound, Gunslinger, Stars & Scrubs, Balanced Attack, Ball Control,
+  Big-Play Offense; kind `style` in the database),
+- a *formation* (what it put in its 2 FLEX spots: WR + WR = Four-Wide Spread, RB + WR = Pro Set, RB + RB = Power I,
+  one TE = Heavy Set, two TEs = Jumbo),
+- a *front office* label (how the roster was put together: Draft and Develop, Franchise Tag, Wheeler-Dealer, Waiver
+  Wire Warrior, Youth Movement, Old Guard, Deep Bench; kind `build`).
+
+A scheme or front-office label is earned at 1 standard deviation or more from that season's league average on the
+label's measure (Wheeler-Dealer and Waiver Wire Warrior also need 10% of the points from that source); the strongest
+wins, else Well-Rounded / Mixed Build. The formation is the one a team lined up in for more than half its weeks,
+else Multiple. All-time = the label a franchise leaned toward most on average over 2+ seasons (at least 0.5
+standard deviations); all-time formation = more than half of all its weeks. Each card also gets a **scouting
+report** in football voice, written from the team's real numbers by `app/story.py`.
+**To rename a label or formation, or change a threshold**, edit the last two sections of
+`db/seed/001_reference_data.sql`, then run `python -m etl.run_sql --all`. **To change a scouting report's wording**,
+edit the phrasings at the top of `app/story.py` (no SQL needed). Useful in DBeaver: `core.v_team_identity`,
+`core.v_team_formation`, `core.v_team_profile` (the measures), `core.v_team_identity_score` (every label's score),
+`core.v_franchise_identity`, `core.v_franchise_formation`, `qa.identity_coverage` (birth dates / stat lines behind
+the measures).
 
 **How the Trade analyzer judges a trade** (`db/schema/015_trade_analyzer.sql`): each team is credited with what it
 received, as points over a replacement-level starter at the same position (the Draft page's levels) in the weeks it
