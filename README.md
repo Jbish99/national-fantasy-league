@@ -328,6 +328,18 @@ Sheet rules:
 The look itself: theme in `.streamlit/config.toml` (dark, gold highlight, Archivo font served from
 `app/static/fonts/`), shared CSS and cards (matchup card, score tiles, tables) in `app/lib.py`.
 
+## 13. Timing the pages (Phase 11)
+
+    python -m etl.time_app
+
+Opens every page the way a visitor does (no browser needed) against the app's database (your
+`.streamlit/secrets.toml` login, else `.env`), twice: **cold** (nothing cached, every query goes to the database)
+and **warm** (cached). It prints a table per page (seconds, queries, connection time, time the database itself
+worked, what the page sends to the browser, image KB) and the slowest queries, and writes the full report to
+`data/cache/time_app_<date>_<time>.md`. Options: `--page trade` (only matching pages), `--repeat 3` (median of 3
+cold runs), `--no-explain` (skip the database-side timing). Run it when nobody has used the site for 5+ minutes
+to also see how long the database takes to wake up. It only reads.
+
 ## Where the official history comes from
 
 - **`core.game`** is the official record of every game (2020 →). It's built from the All-In-One workbook.
@@ -370,4 +382,6 @@ app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared loo
 8. Redesign with league graphics ✅ (dark, card-based; see section 12)
 7. NFL stat enrichment ✅: 7a (Players, Box scores, player records, weather splits); 7b (snaps, injuries,
    expected points, play-by-play usage, DEF points rebuilt)
-9. Trade analyzer (next)
+9. Trade analyzer ✅
+10. Team identities ✅ (+ 10b formations and scouting reports)
+11. Speed-up (in progress: measuring with `etl/time_app.py`, section 13)
