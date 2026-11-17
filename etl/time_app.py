@@ -84,8 +84,8 @@ def app_database_url():
         url = (env.get(name) or os.getenv(name) or "").strip()
         if url and "USER:PASSWORD" not in url:
             return url, f".env {name}"
-    sys.exit("No database address found: run `python -m etl.setup_app_login` (writes .streamlit/secrets.toml) "
-             "or fill in DATABASE_URL in .env.")
+    sys.exit("No database address found: fill in DATABASE_URL in .env (Neon's Connect button, pooled). "
+             "Don't run setup_app_login just for this: it changes the live app's password.")
 
 
 def describe(url):
