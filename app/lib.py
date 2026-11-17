@@ -819,6 +819,74 @@ def week_extras(where_sql, params):
     return {(r["player_id"], r["season"], r["week"]): r for r in df.to_dict("records")}
 
 
+# ---------------------------------------------------------------------------
+# Phase 12: player rankings (db/schema/019_player_rankings.sql). Ranks are among EVERY NFL player at the
+# position, in our league's scoring; ties share a rank and show as "T-WR12".
+# ---------------------------------------------------------------------------
+POSITION_PLURAL = {"QB": "QBs", "RB": "RBs", "WR": "WRs", "TE": "TEs", "K": "kickers", "DEF": "defenses"}
+POSITION_WORD = {"QB": "quarterback", "RB": "running back", "WR": "wide receiver", "TE": "tight end", "K": "kicker",
+                 "DEF": "defense"}
+
+
+def rank_label(position, rank, tied=False):
+    """'WR2' / 'T-WR12'. '' when there's no rank."""
+    if rank is None or pd.isna(rank) or not isinstance(position, str):
+        return ""
+    return f"{'T-' if tied is True or (tied is not None and not pd.isna(tied) and bool(tied)) else ''}{position}{int(rank)}"
+
+
+def rank_tag(position, rank, tied=False, hover=""):
+    """The small rank under a points number (box scores, game logs). Gold for the top 3 at the position, plain
+    inside the top 12, quiet after that (the label itself carries the meaning). '' when there's no rank."""
+    label = rank_label(position, rank, tied)
+    if not label:
+        return ""
+    tier = " top" if int(rank) <= 3 else "" if int(rank) <= 12 else " low"
+    tip = f' title="{esc(hover)}"' if hover else ""
+    return f'<span class="wrank{tier}"{tip}>{esc(label)}</span>'
+
+
+def rank_chip(position, rank, tied=False, hover="", href=None):
+    """A season finish as a small chip ('RB4'), gold for the top 3. href: makes it a link (e.g. rankings_url())."""
+    label = rank_label(position, rank, tied)
+    if not label:
+        return ""
+    tip = f' title="{esc(hover)}"' if hover else ""
+    chip_html = f'<span class="rkchip{" top" if int(rank) <= 3 else ""}"{tip}>{esc(label)}</span>'
+    return link(href, chip_html) if href else chip_html
+
+
+def week_ranks(where_sql, params):
+    """Rows of core.v_player_week_rank (weekly position ranks) keyed by (player_id, season, week).
+    Empty until db/schema/019 is applied, so pages still work right after a push."""
+    try:
+        df = query(f"select * from core.v_player_week_rank where player_id is not null and {where_sql}", params)
+    except psycopg.Error:
+        return {}
+    return {(r["player_id"], r["season"], r["week"]): r for r in df.to_dict("records")}
+
+
+def week_rank_tag(r, sleeper_points=None):
+    """Rank tag from a v_player_week_rank row (dict), with the plain numbers on hover. sleeper_points: the points the
+    page shows; when the rebuilt points it was ranked on differ, the hover says so."""
+    if not r:
+        return ""
+    position = r["position"]
+    hover = (f"{rank_label(position, r['pos_rank'], r['pos_tied'])}: "
+             f"{ordinal(r['pos_rank'])}{' (tied)' if r['pos_tied'] else ''} of {int(r['pos_count'])} "
+             f"{POSITION_PLURAL.get(position, position)} that week, among every NFL player (our league's scoring).")
+    if sleeper_points is not None and not pd.isna(sleeper_points) and abs(float(sleeper_points) - float(r["points"])) >= 0.01:
+        hover += (f" Ranked on {float(r['points']):.2f} points rebuilt from the NFL stat line "
+                  f"(Sleeper: {float(sleeper_points):.2f}).")
+    return rank_tag(position, r["pos_rank"], r["pos_tied"], hover)
+
+
+def rankings_url(season=None, position=None, stat=None):
+    """The Player rankings page, opened on a season / position / stat (Phase 12)."""
+    params = {k: v for k, v in (("season", season), ("pos", position), ("stat", stat)) if v is not None}
+    return "rankings" + (("?" + urlencode(params)) if params else "")
+
+
 def signed(value, digits=2):
     """'+1.25' in blue / '-0.80' in red (the sign carries the meaning too). '' for missing."""
     if value is None or pd.isna(value):
@@ -1065,6 +1133,40 @@ a.tile-link:hover .tile {{ border-color: #4A5878; }}
 .glog .ps {{ color: #C3CBD8; font-size: 13px; }}
 .grow .bpts {{ text-align: right; }}
 .grow .bslot {{ justify-content: flex-start; }}
+/* player rankings (Phase 12) */
+.wrank {{ display: block; margin-top: 4px; font-size: 11px; font-weight: 700; line-height: 1; letter-spacing: .02em;
+  font-variation-settings: 'wdth' 100; color: {TEXT_SECONDARY}; white-space: nowrap; cursor: help; }}
+.wrank.top {{ color: {ACCENT}; }}
+.wrank.low {{ color: {MUTED}; font-weight: 600; }}
+.rkchip {{ display: inline-block; padding: 2px 7px; border-radius: 6px; font-size: 12px; font-weight: 700;
+  background: #202B42; color: #D5DBE6; white-space: nowrap; }}
+.rkchip.top {{ background: rgba(243,197,74,.16); color: {ACCENT}; }}
+a.lnk .rkchip {{ cursor: pointer; }}
+.rk-n {{ font-weight: 800; font-variation-settings: 'wdth' 66; font-size: 19px; }}
+.rk-line {{ color: {MUTED}; font-size: 12.5px; line-height: 1.35; margin-top: 2px; white-space: normal; max-width: 62ch; }}
+.pbar {{ position: relative; height: 8px; border-radius: 4px; background: #1F2A40; min-width: 70px; }}
+.pbar span {{ position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: {SERIES_BLUE}; }}
+.rlist {{ padding: 2px 0 4px; overflow: hidden; }}
+.rrow {{ display: grid; grid-template-columns: 92px minmax(0,1fr) 130px 96px; align-items: center; column-gap: 14px;
+  padding: 9px 16px; border-bottom: 1px solid #1E283C; }}
+.rrow:last-child {{ border-bottom: 0; }}
+.rrow.head {{ color: {MUTED}; font-size: 12.5px; font-weight: 600; padding-top: 12px; padding-bottom: 10px; border-bottom-color: {LINE}; }}
+.rrow.head .r {{ text-align: right; }}
+.rrow .rk {{ display: flex; align-items: center; gap: 8px; }}
+.rrow .rp {{ min-width: 0; display: flex; flex-direction: column; gap: 3px; }}
+.rrow .rn {{ font-weight: 650; }}
+.rrow .rm {{ display: flex; align-items: center; flex-wrap: wrap; gap: 0 6px; color: {MUTED}; font-size: 12.5px; }}
+.rrow .rm .poschip {{ font-size: 10.5px; padding: 1px 5px; min-width: 26px; }}
+.rrow .rsep {{ color: #3A4763; }}
+.rrow .rlogos {{ display: inline-flex; gap: 3px; align-items: center; }}
+.rrow .rv {{ text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }}
+.rrow .rv b {{ font-weight: 800; font-variation-settings: 'wdth' 66; font-size: 21px; line-height: 1; }}
+.rrow .rv span {{ color: {MUTED}; font-size: 12px; white-space: nowrap; }}
+.scout {{ padding: 12px 18px; margin-top: 4px; }}
+.scout .id-story {{ margin-top: 0; border-top: 0; padding-top: 0; }}
+.depth {{ margin-top: 2px; font-size: 13.5px; color: #D5DBE6; line-height: 1.55; }}
+.depth .rkchip {{ font-size: 11px; padding: 1px 5px; margin-left: 4px; }}
+.depth .muted {{ font-size: 12px; }}
 .phdr {{ display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }}
 .phdr .poschip {{ font-size: 14px; padding: 4px 10px; }}
 .had {{ display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0 2px; align-items: center; }}
@@ -1083,6 +1185,12 @@ a.tile-link:hover .tile {{ border-color: #4A5878; }}
   .grow .lg {{ width: 22px !important; height: 22px !important; }}
   .glog .pm, .glog .ps {{ font-size: 11px; }}
   .grow .poschip {{ min-width: 24px; padding: 2px 3px; font-size: 10.5px; }}
+  .wrank {{ font-size: 10px; margin-top: 3px; }}
+  .rrow {{ grid-template-columns: 54px minmax(0,1fr) 78px; column-gap: 8px; padding: 8px 8px; }}
+  .rrow .rb, .rrow .rk-line {{ display: none; }}
+  .rrow .rk {{ flex-direction: column; align-items: flex-start; gap: 3px; }}
+  .rrow .rv b {{ font-size: 17px; }}
+  .rrow .rv span, .rrow .rm {{ font-size: 11px; }}
   .title {{ font-size: 34px; }}
   .helmet {{ width: 54px; }}
   .helmet-badge {{ padding: 0; }}

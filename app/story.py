@@ -374,3 +374,237 @@ def franchise_book(alltime, form, players, labels):
                 .sort_values(["points", "player_id"], ascending=[False, True]).iloc[0].to_dict())
         out.append(BOOK_ICON.format(icon=_name(best), first=first, pts=f"{_pts(best['points'])} points"))
     return " ".join(out)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Phase 12: player scouting lines (Player rankings and Players pages). One role sentence from his real usage,
+# then where he finished among EVERY NFL player at his position (our league's scoring). Shares are of his
+# team's carries / targets in the games he played. EDIT THE WORDING AND THE THRESHOLDS HERE.
+#
+# Facts: {pass_ypg} {rush_ypg} {att_pg} {pass_td} {carry_share} {target_share} {tgt_pg} {car_pg} {gl}
+#        {deep_share} {rz} {fg} {fga} {fg50} {long} {sacks} {takeaways} {pa_pg} {games}
+# ---------------------------------------------------------------------------------------------------
+# position -> [(role, (fact, ">=" or "<=", threshold) or None)]: the first role whose test passes wins;
+# None = the catch-all. A test on a missing fact fails (e.g. no snap or share data).
+ROLE_RULES = {
+    "QB": [("dual_threat", ("rush_ypg_v", ">=", 30)), ("volume_passer", ("att_pg_v", ">=", 37)),
+           ("pocket_passer", None)],
+    "RB": [("bell_cow", ("carry_share_v", ">=", 0.60)), ("receiving_back", ("target_share_v", ">=", 0.12)),
+           ("goal_line_back", ("gl_pg_v", ">=", 0.6)), ("committee_back", None)],
+    "WR": [("alpha_receiver", ("target_share_v", ">=", 0.25)), ("deep_threat", ("deep_share_v", ">=", 0.25)),
+           ("red_zone_receiver", ("rz_pg_v", ">=", 1.0)), ("receiver", None)],
+    "TE": [("featured_te", ("target_share_v", ">=", 0.18)), ("red_zone_te", ("rz_pg_v", ">=", 0.8)),
+           ("tight_end", None)],
+    "K": [("big_leg", ("fg50_v", ">=", 3)), ("kicker", None)],
+    "DEF": [("ball_hawks", ("takeaways_pg_v", ">=", 1.7)), ("pass_rush", ("sacks_pg_v", ">=", 3)),
+            ("stingy", ("pa_pg_v", "<=", 18)), ("defense", None)],
+}
+# Football names for the roles (shown as a label on the rankings page).
+ROLE_NAMES = {
+    "dual_threat": "Dual threat", "volume_passer": "Volume passer", "pocket_passer": "Pocket passer",
+    "bell_cow": "Bell cow", "receiving_back": "Third-down back", "goal_line_back": "Goal-line back",
+    "committee_back": "Committee back", "alpha_receiver": "Alpha receiver", "deep_threat": "Deep threat",
+    "red_zone_receiver": "Red-zone target", "receiver": "Receiver", "featured_te": "Featured tight end",
+    "red_zone_te": "Red-zone tight end", "tight_end": "Tight end", "big_leg": "Big leg", "kicker": "Kicker",
+    "ball_hawks": "Ball hawks", "pass_rush": "Pass rush", "stingy": "Stingy defense", "defense": "Defense",
+}
+ROLE = {
+    "dual_threat": [
+        "Dual-threat quarterback: {rush_ypg} rushing yards a game on top of {pass_ypg} through the air.",
+        "Makes plays with his legs: {rush_ypg} rushing yards a game to go with {pass_ypg} passing.",
+    ],
+    "volume_passer": [
+        "Volume passer: {att_pg} throws a game for {pass_ypg} yards.",
+        "Lives in the shotgun: {att_pg} pass attempts a game ({pass_ypg} yards).",
+    ],
+    "pocket_passer": [
+        "Runs the offense from the pocket: {pass_ypg} passing yards a game[[ and {pass_td} touchdown passes]].",
+        "Pocket passer: {pass_ypg} yards a game through the air[[, {pass_td} TD passes]].",
+    ],
+    "bell_cow": [
+        "Bell-cow back: {carry_share} of his team's carries in the games he played.",
+        "The workhorse: {carry_share} of his team's carries when he suited up[[, plus {tgt_pg} targets a game]].",
+    ],
+    "receiving_back": [
+        "Pass-catching back: {target_share} of his team's targets[[ and {carry_share} of its carries]] when he played.",
+        "A weapon out of the backfield: {target_share} of his team's targets in the games he played.",
+    ],
+    "goal_line_back": [
+        "Goal-line hammer: {gl} carries inside the 5-yard line.",
+        "The short-yardage call: {gl} carries inside the 5.",
+    ],
+    "committee_back": [
+        "Committee back: {carry_share} of his team's carries in the games he played.",
+        "Shared the backfield: {carry_share} of his team's carries when he played.",
+        "~Running back: {car_pg} carries and {tgt_pg} targets a game.",
+    ],
+    "alpha_receiver": [
+        "Alpha receiver: {target_share} of his team's targets in the games he played.",
+        "Target hog: the ball went his way on {target_share} of his team's targets when he played.",
+    ],
+    "deep_threat": [
+        "Field stretcher: {deep_share} of his targets came 20+ yards downfield.",
+        "Deep threat: {deep_share} of his targets were thrown 20+ yards down the field.",
+    ],
+    "red_zone_receiver": [
+        "Red-zone target: {rz} looks inside the 20.",
+        "Where the ball goes near the goal line: {rz} targets inside the 20.",
+    ],
+    "receiver": [
+        "Pass catcher: {tgt_pg} targets a game[[ ({target_share} of his team's when he played)]].",
+        "On the receiving end of {tgt_pg} targets a game[[, {target_share} of his team's when he played]].",
+    ],
+    "featured_te": [
+        "Featured tight end: {target_share} of his team's targets in the games he played.",
+        "A tight end the offense runs through: {target_share} of his team's targets when he played.",
+    ],
+    "red_zone_te": [
+        "Red-zone tight end: {rz} looks inside the 20.",
+        "A big target near the goal line: {rz} looks inside the 20.",
+    ],
+    "tight_end": [
+        "Tight end: {tgt_pg} targets a game[[ ({target_share} of his team's when he played)]].",
+        "In the pattern for {tgt_pg} targets a game[[, {target_share} of his team's when he played]].",
+    ],
+    "big_leg": [
+        "Big leg: {fg50} field goals from 50+ yards[[ (long of {long})]].",
+        "Range for days: {fg50} field goals from 50 or more[[, long of {long}]].",
+    ],
+    "kicker": [
+        "Kicker: {fg} of {fga} on field goals[[, long of {long}]].",
+        "Made {fg} of {fga} field goals[[ (long of {long})]].",
+    ],
+    "ball_hawks": [
+        "Ball hawks: {takeaways} takeaways in {games} games.",
+        "A defense that takes the ball away: {takeaways} takeaways in {games} games.",
+    ],
+    "pass_rush": [
+        "Lives in the backfield: {sacks} sacks in {games} games.",
+        "A pass rush that gets home: {sacks} sacks in {games} games.",
+    ],
+    "stingy": [
+        "Stingy defense: {pa_pg} points allowed a game.",
+        "Hard to score on: {pa_pg} points allowed a game.",
+    ],
+    "defense": [
+        "Defense: {sacks} sacks and {takeaways} takeaways in {games} games.",
+        "{sacks} sacks and {takeaways} takeaways in {games} games.",
+    ],
+}
+# Where he finished. {label} = 'RB4' (total points), {label_ppg} = 'RB2' per game (needs the minimum games).
+FINISH = {
+    "first": [
+        "No {word} scored more in {season}: {points} points[[, {label_ppg} per game]].",
+        "The top-scoring {word} of {season}: {points} points[[ ({label_ppg} per game)]].",
+    ],
+    "shared_first": ["Tied for the most points by a {word} in {season}: {points}."],
+    "other": [
+        "Finished {label} in {season} with {points} points[[, {label_ppg} per game]].",
+        "{label} in {season}: {points} points[[, {label_ppg} on a per-game basis]].",
+    ],
+}
+FINISH_ALLTIME = {
+    "first": [
+        "No {word} has scored more since 2021: {points} points in {games} games.",
+        "The top-scoring {word} since 2021: {points} points in {games} games.",
+    ],
+    "shared_first": ["Tied for the most points by a {word} since 2021: {points}."],
+    "other": [
+        "{label} since 2021: {points} points in {games} games[[, {label_ppg} per game]].",
+        "All-time {label} since 2021, with {points} points in {games} games[[ ({label_ppg} per game)]].",
+    ],
+}
+POSITION_WORDS = {"QB": "quarterback", "RB": "running back", "WR": "wide receiver", "TE": "tight end", "K": "kicker",
+                  "DEF": "defense"}
+NUMBER_ONE_WEEKS = "Finished a week as the No. 1 {word} {n} times."
+
+
+def _f(row, key):
+    v = row.get(key)
+    return None if _missing(v) else float(v)
+
+
+def _per_game(row, key):
+    games, v = _f(row, "games"), _f(row, key)
+    return None if not games or v is None else v / games
+
+
+def _share(value):
+    return None if value is None else f"{value:.0%}"
+
+
+def _one(value):
+    return None if value is None else f"{value:.1f}"
+
+
+def player_facts(row):
+    """Numbers for the role sentence, from a core.v_player_season_rank / v_player_career_rank row (dict).
+    *_v = raw value (for the tests), the rest = display text."""
+    targets, deep = _f(row, "targets"), _f(row, "deep_targets")
+    takeaways = None if _f(row, "def_interceptions") is None else \
+        (_f(row, "def_interceptions") or 0) + (_f(row, "def_fumble_recoveries") or 0)
+    facts = {
+        "pass_ypg_v": _per_game(row, "passing_yards"), "rush_ypg_v": _per_game(row, "rushing_yards"),
+        "att_pg_v": _per_game(row, "pass_attempts"), "carry_share_v": _f(row, "carry_share"),
+        "target_share_v": _f(row, "target_share"), "gl_pg_v": _per_game(row, "goal_line_carries"),
+        "deep_share_v": deep / targets if targets and targets >= 20 and deep is not None else None,
+        "rz_pg_v": _per_game(row, "red_zone_looks"), "fg50_v": _f(row, "fg_made_50"),
+        "takeaways_pg_v": None if takeaways is None or not _f(row, "games") else takeaways / _f(row, "games"),
+        "sacks_pg_v": _per_game(row, "def_sacks"), "pa_pg_v": _f(row, "def_points_allowed_pg"),
+    }
+    facts.update({
+        "pass_ypg": _one(facts["pass_ypg_v"]), "rush_ypg": _one(facts["rush_ypg_v"]), "att_pg": _one(facts["att_pg_v"]),
+        "pass_td": None if not _f(row, "passing_tds") else f"{int(_f(row, 'passing_tds'))}",
+        "carry_share": _share(facts["carry_share_v"]), "target_share": _share(facts["target_share_v"]),
+        "tgt_pg": _one(_per_game(row, "targets")), "car_pg": _one(_per_game(row, "carries")),
+        "gl": None if _f(row, "goal_line_carries") is None else f"{int(_f(row, 'goal_line_carries'))}",
+        "deep_share": _share(facts["deep_share_v"]),
+        "rz": None if _f(row, "red_zone_looks") is None else f"{int(_f(row, 'red_zone_looks'))}",
+        "fg": None if _f(row, "fg_made") is None else f"{int(_f(row, 'fg_made'))}",
+        "fga": None if _f(row, "fg_att") is None else f"{int(_f(row, 'fg_att'))}",
+        "fg50": None if _f(row, "fg_made_50") is None else f"{int(_f(row, 'fg_made_50'))}",
+        "long": None if not _f(row, "fg_long") else f"{int(_f(row, 'fg_long'))}",
+        "sacks": None if _f(row, "def_sacks") is None else f"{_f(row, 'def_sacks'):g}",
+        "takeaways": None if takeaways is None else f"{int(takeaways)}",
+        "pa_pg": _one(facts["pa_pg_v"]),
+        "games": None if _f(row, "games") is None else f"{int(_f(row, 'games'))}",
+    })
+    return facts
+
+
+def player_role(row, facts=None):
+    """The role code (ROLE_RULES) for a season / career row, or None for an unknown position."""
+    facts = facts or player_facts(row)
+    for code, test in ROLE_RULES.get(row.get("position"), []):
+        if test is None:
+            return code
+        value = facts.get(test[0])
+        if value is not None and (value >= test[2] if test[1] == ">=" else value <= test[2]):
+            return code
+    return None
+
+
+def player_line(row, season=None):
+    """A player's scouting line as plain text: role sentence + where he finished (escape it for HTML).
+    row: core.v_player_season_rank row (season = its season) or core.v_player_career_rank row (season=None =
+    all-time since 2021). Every number comes from the row; 'No ... more' only when he really was No. 1."""
+    facts = player_facts(row)
+    role = player_role(row, facts)
+    key = f"{row.get('rank_id')}|{season or 'all'}"
+    out = [pick(ROLE.get(role, []), f"{key}|role", facts)] if role else []
+    position = row.get("position")
+    rank = row.get("pos_rank")
+    if not _missing(rank) and isinstance(position, str):
+        word = POSITION_WORDS.get(position, position)
+        tied = bool(row.get("pos_tied")) if not _missing(row.get("pos_tied")) else False
+        ppg_rank = row.get("pos_rank_ppg")
+        finish = {"label": f"{'T-' if tied else ''}{position}{int(rank)}", "season": season, "word": word,
+                  "points": f"{float(row['points']):,.1f}", "games": f"{int(float(row['games']))}",
+                  "label_ppg": None if _missing(ppg_rank) else
+                  f"{'T-' if bool(row.get('pos_tied_ppg')) else ''}{position}{int(ppg_rank)}"}
+        case = "other" if int(rank) != 1 else ("shared_first" if tied else "first")
+        out.append(pick((FINISH if season else FINISH_ALLTIME)[case], f"{key}|finish", finish))
+        top1 = row.get("top1_weeks")
+        if not _missing(top1) and int(top1) >= 2:
+            out.append(NUMBER_ONE_WEEKS.format(word=word, n=int(top1)))
+    return " ".join(s for s in out if s)

@@ -55,6 +55,9 @@ WARN_ONLY = {
     "formation_unknown": "a formation is missing from core.formation in db/seed/001 (deleted row?); ask Claude",
     "precomputed_problem": "a precomputed copy wasn't built or didn't match its view, so the app reads that view "
                            "directly (slower, still correct); ask Claude",
+    "week_rank_duplicates": "a player shows twice in the weekly position ranks (rank chips only); ask Claude",
+    "week_rank_missing": "a rostered player-week has a stat line but no weekly position rank; usually NFL "
+                         "play-by-play trailing for a defense, else ask Claude",
 }
 # Known, accepted counts. custom_points_used = 2: the 2022 Fantasy Bowl (co-champions).
 EXPECTED = {"custom_points_used": 2}

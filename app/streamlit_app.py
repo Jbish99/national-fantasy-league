@@ -50,6 +50,8 @@ pages = st.navigation(
             st.Page("views/record_book.py", title="Record book", icon=":material/menu_book:"),
             st.Page("views/franchises.py", title="Franchises", icon=":material/shield:"),
             st.Page("views/player.py", title="Players", icon=":material/person:", url_path="player"),
+            # url_path "rankings": the address lib.rankings_url() links to (Phase 12)
+            st.Page("views/rankings.py", title="Player rankings", icon=":material/leaderboard:", url_path="rankings"),
         ],
         "Getting better": [
             st.Page("views/lineups.py", title="Lineups", icon=":material/event_seat:"),

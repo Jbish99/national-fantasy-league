@@ -185,9 +185,12 @@ Pages, in two sidebar sections:
   any game, both lineups slot by slot with real NFL stat lines, snap share and injury tags), Head-to-head (matrix + any series), Champions &
   playoffs, Record book (team records + best/worst single-game player performances), Franchises (season by
   season, scoring trend, every opponent), Players (Phase 7a: every week a player was on a league roster, with
-  his stat line, NFL opponent, weather, who had him, how he scores by conditions, plus usage and expected points per season). These read the official
-  record through `db/schema/008_app_views.sql`, the player game log in `db/schema/012_player_game_log.sql` and the
-  weather splits in `db/schema/013_weather_splits.sql`.
+  his stat line, NFL opponent, weather, who had him, how he scores by conditions, plus usage and expected points per season;
+  Phase 12: his weekly position rank under each week's points, his NFL finish per season and a scouting report),
+  Player rankings (Phase 12: every NFL player ranked by season or all-time on 30+ stats, overall or by position,
+  with scouting lines and each league team's depth chart). These read the official
+  record through `db/schema/008_app_views.sql`, the player game log in `db/schema/012_player_game_log.sql`, the
+  weather splits in `db/schema/013_weather_splits.sql` and the ranks in `db/schema/019_player_rankings.sql`.
 - **Getting better:** Lineups (points left on the bench vs the best possible lineup, wrong start/sit calls,
   starters listed Out or Doubtful), Luck (actual record vs all-play record, starters' points over expected),
   Trade analyzer (Phase 9: every trade valued over time, who won, report cards, trade partners, timeline),
@@ -232,6 +235,17 @@ either way. Useful in DBeaver: `core.v_trade` (one row per trade), `core.v_trade
 `core.v_trade_asset_value` (per player/pick), `core.v_traded_pick` (every traded pick and who was drafted with it).
 Checks (warn only): `qa.trade_vs_acquisitions`, `qa.traded_pick_unmatched`, `qa.replacement_level_mismatch`.
 
+**How player rankings work** (`db/schema/019_player_rankings.sql`, Phase 12): every NFL player with a stat line is
+scored with our league's rules for that season (rebuilt from the stat line, so players never on a league roster count
+too; DEF from the rebuilt DEF points) and ranked within his position (Sleeper's position; kickers from 2026). Ties
+share a rank and show as "T-WR12". A week's rank ("WR2 that week") shows under the points on the Players page and in
+Box scores, bench weeks included. A season = NFL weeks 1-17 (the weeks the league plays); "NFL finish" = rank by total
+points; per-game ranks need 6 games (17 all-time). The Positions page ranks each team's position rooms 1-12. Useful in
+DBeaver: `core.v_player_week_rank`, `core.v_player_season_rank`, `core.v_player_career_rank`,
+`core.v_position_group_rank`. Checks (warn only): `qa.week_rank_duplicates`, `qa.week_rank_missing`. **To change the
+scouting-line wording or the role thresholds** (Bell cow = 60%+ of his team's carries, ...), edit the Phase 12
+section at the bottom of `app/story.py`.
+
 Every view also works in DBeaver, e.g. `select * from core.v_lineup_week` or `core.v_draft_value`.
 Results stay cached until the data changes (Phase 11, section 13): every load stamps a new data version and the app
 checks it about once a minute, so new data shows up within a minute of a load. **⋮** menu (top right) →
@@ -240,7 +254,8 @@ checks it about once a minute, so new data shows up within a minute of a load. *
 Page files live in `app/views/` (not `app/pages/`: Streamlit treats a folder named `pages` as its old
 automatic menu, which breaks direct links to a page).
 
-Pages link to each other: a game opens at `/boxscore?game=2025-17-OAK-SDP`, a player at `/player?id=<Sleeper id>`.
+Pages link to each other: a game opens at `/boxscore?game=2025-17-OAK-SDP`, a player at `/player?id=<Sleeper id>`,
+the rankings at `/rankings?season=2025&pos=RB&stat=ppg` (`season=all` = all-time).
 Clicking a score card on Home, a week on a player's page, or a name in a box score follows those links
 (the app reloads on the new page, which takes a second).
 
@@ -412,3 +427,4 @@ app/                 Streamlit app: streamlit_app.py (entry), lib.py (shared loo
 9. Trade analyzer ✅
 10. Team identities ✅ (+ 10b formations and scouting reports)
 11. Speed-up ✅ (section 13)
+12. Player rankings ✅ (weekly position ranks on Players + Box scores, Player rankings page, position rooms)

@@ -4,6 +4,8 @@ Phase 7a: one player's league history. Every week he was on a league roster (202
 who had him, where he was in the lineup, what he scored for that team, and his real NFL stat line,
 opponent, weather, snap share and injury status. Plus his season totals, usage and expected points (7b),
 weather splits (all his NFL games from 2021 on; defenses too since 7b) and every league move.
+Phase 12: a scouting report (his role + where he finished among every NFL player at his position), his season
+finish in "Season by season", and his weekly position rank ("WR2") under each week's points.
 
 Open a player straight from a link: player?id=<Sleeper player id> (lib.player_url()).
 """
@@ -13,9 +15,11 @@ import pandas as pd
 import psycopg
 import streamlit as st
 
-from lib import (SERIES_BLUE, SERIES_ORANGE, WEATHER, box_url, chip, city, conditions, esc, footer, full_name, html,
-                 html_table, injury_tag, link, logo, nfl_game_text, position_chip, pts, query, require, section,
-                 show_chart, signed, snaps_text, stat_cell, stat_strip, team, text, trade_url, week_extras)
+from lib import (POSITION_PLURAL, SERIES_BLUE, SERIES_ORANGE, WEATHER, box_url, chip, city, conditions, esc, footer,
+                 full_name, html, html_table, injury_tag, link, logo, nfl_game_text, ordinal, position_chip, pts, query,
+                 rank_chip, rank_label, rankings_url, require, section, show_chart, signed, snaps_text, stat_cell,
+                 stat_strip, story_block, team, text, trade_url, week_extras, week_rank_tag, week_ranks)
+from story import player_line
 
 require("core.v_player_game_log")
 
@@ -59,6 +63,12 @@ me = players[players["player_id"] == pid].iloc[0]
 
 log = query("select * from core.v_player_game_log where player_id = %s order by season, week", (pid,))
 extras = week_extras("player_id = %s", (pid,))
+ranks = week_ranks("player_id = %s", (pid,))                        # Phase 12: weekly position ranks
+try:                                                                # Phase 12: season finishes (every season he played)
+    finishes = query("select * from core.v_player_season_rank where player_id = %s order by season", (pid,))
+except psycopg.Error:                                               # 019 not applied yet (right after a push)
+    finishes = pd.DataFrame()
+finish_of = {int(r["season"]): r for r in finishes.to_dict("records")}
 
 # --- header: name, position, who had him ---------------------------------------------------------
 stints = []                                                         # consecutive weeks with one team
@@ -83,7 +93,32 @@ html(stat_strip([
     (f"{best['league_points']:.2f}", f"Best week ({best['season']} wk {best['week']})"),
 ]))
 
+# --- scouting report (Phase 12): his latest season with NFL stats, else nothing ----------------------------
+if finish_of:
+    latest = max(finish_of)
+    line = player_line(finish_of[latest], latest)
+    if line:
+        html(f'<section class="card scout">{story_block(line, f"Scouting report, {latest}")}</section>')
+
 # --- season by season ------------------------------------------------------------------------
+
+
+def finish_cell(f):
+    """Phase 12: 'RB4' (season finish by total points, every NFL player) + 'RB2 per game' under it."""
+    if not f:
+        return '<span class="muted">-</span>'
+    position = f["position"]
+    hover = (f"{ordinal(f['pos_rank'])}{' (tied)' if f['pos_tied'] else ''} of {int(f['pos_count'])} "
+             f"{POSITION_PLURAL.get(position, position)} in {int(f['season'])} by total points "
+             f"({float(f['points']):,.1f} in {int(f['games'])} games), every NFL player, our scoring")
+    chip_html = rank_chip(position, f["pos_rank"], f["pos_tied"], hover,
+                          href=rankings_url(int(f["season"]), position, "points"))
+    per_game = rank_label(position, f.get("pos_rank_ppg"), f.get("pos_tied_ppg"))
+    under = (f'<div class="muted small">{esc(per_game)} per game</div>' if per_game
+             else f'<div class="muted small">{int(f["games"])} games</div>')
+    return chip_html + under
+
+
 section("Season by season", "Points as Sleeper scored them for the team that had him")
 rows = []
 for season, s in log.groupby("season", sort=False):
@@ -93,9 +128,14 @@ for season, s in log.groupby("season", sort=False):
     rows.append([f'<span class="yr">{season}</span>', teams_html, str(len(s)), str(len(s_started)),
                  pts(s["league_points"].sum()), f'<span class="big-n">{pts(s_started["league_points"].sum())}</span>',
                  f"{s_started['league_points'].mean():.2f}" if len(s_started) else "",
-                 f'{pts(top["league_points"])} <span class="muted small">wk {top["week"]}</span>'])
+                 f'{pts(top["league_points"])} <span class="muted small">wk {top["week"]}</span>',
+                 finish_cell(finish_of.get(int(season)))])
 html(html_table([("Season", "l"), ("Team", "l"), ("Weeks", "r"), ("Started", "r"), ("All points", "r"),
-                 ("As a starter", "r"), ("Per start", "r"), ("Best week", "r")], rows[::-1]))
+                 ("As a starter", "r"), ("Per start", "r"), ("Best week", "r"), ("NFL finish", "l")], rows[::-1]))
+if finish_of:
+    st.caption("NFL finish = where his season ranked among every NFL player at his position, by total points in our "
+               "league's scoring over weeks 1-17 (the weeks the league plays), with his per-game rank under it "
+               "(needs 6 games). Opens that season's Player rankings.")
 
 # --- usage and expected points ------------------------------------------------------------------
 if me["position"] in ("QB", "RB", "WR", "TE"):
@@ -189,7 +229,9 @@ weeks = log if choice == "All" else log[log["season"] == int(choice)]
 if choice != "All":
     chart_data = weeks.assign(
         Lineup=weeks["is_starter"].map({True: "Started", False: "On the bench"}),
-        Team=weeks["franchise_code"].map(full_name), Opponent=[nfl_game_text(r) for r in weeks.to_dict("records")])
+        Team=weeks["franchise_code"].map(full_name), Opponent=[nfl_game_text(r) for r in weeks.to_dict("records")],
+        Rank=[rank_label(r["position"], r["pos_rank"], r["pos_tied"]) if r else ""
+              for r in (ranks.get((pid, s, w)) for s, w in zip(weeks["season"], weeks["week"]))])
     bars = alt.Chart(chart_data).mark_bar(width={"band": 0.5}, cornerRadiusEnd=4).encode(
         x=alt.X("week:O", title="Week", axis=alt.Axis(labelAngle=0, grid=False)),
         y=alt.Y("league_points:Q", title="Points"),
@@ -197,7 +239,8 @@ if choice != "All":
                                                     range=[SERIES_BLUE, SERIES_ORANGE]),
                         legend=alt.Legend(title=None, orient="top")),
         tooltip=[alt.Tooltip("week:O", title="Week"), alt.Tooltip("league_points:Q", title="Points", format=".2f"),
-                 "Lineup:N", "Team:N", alt.Tooltip("Opponent:N", title="NFL game")],
+                 alt.Tooltip("Rank:N", title="Position rank"), "Lineup:N", "Team:N",
+                 alt.Tooltip("Opponent:N", title="NFL game")],
     )
     show_chart(bars.properties(height=220))
 
@@ -217,7 +260,8 @@ for r in weeks.sort_values(["season", "week"], ascending=False).to_dict("records
                 f'<div title="{esc(full_name(r["franchise_code"]))}">{logo(r["franchise_code"], r["season"], 26)}</div>'
                 f'<div class="gmain"><span class="pm">{esc(meta)}</span><span class="ps">{tag}{stat_cell(r)}</span></div>'
                 f'<div class="bslot">{position_chip(r["lineup_slot"])}</div>'
-                f'<div class="bpts{"" if r["is_starter"] else " lo"}">{pts(r["league_points"])}</div></div>')
+                f'<div class="bpts{"" if r["is_starter"] else " lo"}">{pts(r["league_points"])}'
+                f'{week_rank_tag(ranks.get((pid, r["season"], r["week"])), r["league_points"])}</div></div>')
 head = ('<div class="grow head"><div>Week</div><div></div><div>NFL game · stat line</div><div>Slot</div>'
         '<div class="r">Points</div></div>')
 html(f'<section class="card glog" aria-label="Week by week">{head}{"".join(rows)}</section>')
@@ -225,7 +269,9 @@ st.caption("Week links open that league game's box score. Team = the league team
            "Sleeper's, under that season's scoring (2021-22 full PPR; 2023 on half PPR plus first-down and TE "
            "bonuses). Stat lines, weather and snap share come from nflverse; 'No stats recorded' = he didn't play, or "
            "played without an offensive stat. O / D / Q = listed Out, Doubtful or Questionable on that week's NFL "
-           "injury report (hover for the injury). PA = points the defense's NFL opponent scored.")
+           "injury report (hover for the injury). PA = points the defense's NFL opponent scored. Under the points: "
+           "where that week ranked among every NFL player at his position, in our league's scoring (WR2 = 2nd-best "
+           "receiver that week; T- = tied; gold = top 3). Hover for the details.")
 
 # --- league moves --------------------------------------------------------------------------------
 moves = query(

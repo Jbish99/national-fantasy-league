@@ -3,6 +3,7 @@ app/views/box_score.py
 Phase 7a: the box score for any league game. The official result as the big matchup card, then both
 starting lineups side by side, slot by slot (like Sleeper's matchup screen), each player with his points
 and real NFL stat line; then both benches. Lineups are Sleeper's (2021 on); 2020 was on ESPN.
+Phase 12: under each player's points, where his week ranked among every NFL player at his position ("WR2").
 
 Open a game straight from a link: boxscore?game=<game_id> (lib.box_url()).
 """
@@ -12,7 +13,7 @@ import streamlit as st
 
 from lib import (box_url, chip, city, esc, footer, full_name, game_label, hero, html, injury_tag, nfl_game_text,
                  ordinal, player_url, position_chip, pts, query, record, records_through, require, score_tile, section,
-                 snaps_text, stat_cell, team_games, text, tiles, week_extras)
+                 snaps_text, stat_cell, team_games, text, tiles, week_extras, week_rank_tag, week_ranks)
 
 require("core.v_player_game_log")
 
@@ -118,6 +119,7 @@ best = query("select franchise_code, player_id, in_best_lineup from core.v_lineu
              "where season = %s and week = %s and franchise_code in (%s, %s)", (season, week, a, b))
 log = log.merge(best, on=["franchise_code", "player_id"], how="left")
 extras = week_extras("season = %s and week = %s and player_id = any(%s)", (season, week, log["player_id"].tolist()))
+ranks = week_ranks("season = %s and week = %s and player_id = any(%s)", (season, week, log["player_id"].tolist()))
 slots = query("select slot_index, slot from core.roster_slot where season = %s and slot <> 'BN' order by slot_index",
               (season,))
 week_totals = query("select franchise_code, points, custom_points from core.team_week "
@@ -161,7 +163,8 @@ def points_cell(r, other, where, bench=False):
     star = bench and flag is not None and not pd.isna(flag) and bool(flag)
     cls = " best" if star else (" lo" if lower else "")
     mark = '<span title="Belonged in the best possible lineup">*</span>' if star else ""
-    return f'<div class="bpts {where}{cls}">{pts(value)}{mark}</div>'
+    rank = week_rank_tag(ranks.get((r["player_id"], season, week)), value)       # Phase 12: "WR2" that week
+    return f'<div class="bpts {where}{cls}">{pts(value)}{mark}{rank}</div>'
 
 
 def row(left, right, slot, bench=False):
@@ -214,7 +217,9 @@ html(f'<section class="card box" aria-label="Box score">{head}{"".join(starters)
 
 notes = ["Points are Sleeper's for each player. Stat lines, opponents and snap shares are the real NFL games "
          "(nflverse). Gold bench points with * = he belonged in the best possible lineup. O / D / Q = listed Out, "
-         "Doubtful or Questionable on that week's NFL injury report (hover for the injury)."]
+         "Doubtful or Questionable on that week's NFL injury report (hover for the injury). Under each score: "
+         "where his week ranked among every NFL player at his position, in our league's scoring (WR2 = the "
+         "2nd-best receiver in the NFL that week; T- = tied; gold = top 3; bench players too). Hover for details."]
 for code, official in ((a, pa), (b, pb)):
     total = sleeper_total.get(code)
     if total is None or official is None or pd.isna(official) or abs(float(total) - float(official)) < 0.01:

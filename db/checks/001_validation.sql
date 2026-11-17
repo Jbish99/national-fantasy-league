@@ -597,6 +597,31 @@ where not exists (select 1 from core.formation where is_fallback)
 comment on view qa.formation_unknown is 'Formations missing from core.formation (names come from db/seed/001).';
 
 
+-- Phase 12 (player rankings). Both only affect the ranks shown on the Players / Box scores / Player rankings
+-- pages, so the refresh just warns.
+-- A player-week ranked twice (two Sleeper ids on one NFL id, or a defense listed twice). Should be empty.
+create or replace view qa.week_rank_duplicates as
+select season, week, rank_id, count(*) as rank_rows
+from core.v_player_week_rank
+group by season, week, rank_id
+having count(*) > 1;
+
+comment on view qa.week_rank_duplicates is 'Player-weeks that appear more than once in core.v_player_week_rank.';
+
+-- A rostered player-week with an NFL stat line but no weekly position rank (e.g. a position the ranks don't
+-- know, or a defense whose rebuilt points are missing because play-by-play hasn't arrived). Should be empty.
+create or replace view qa.week_rank_missing as
+select g.season, g.week, g.franchise_code, g.player_id, g.player_name, g.position
+from core.v_player_game_log g
+where g.has_stat_line
+  and exists (select 1 from core.roster_slot rs where rs.season = g.season and rs.slot = g.position)
+  and not exists (select 1 from core.v_player_week_rank r
+                  where r.player_id = g.player_id and r.season = g.season and r.week = g.week);
+
+comment on view qa.week_rank_missing is
+    'Rostered player-weeks with a stat line but no weekly position rank (core.v_player_week_rank).';
+
+
 -- Not a problem list: how much of each season's starting lineups the identity measures can see.
 create or replace view qa.identity_coverage as
 select season,
@@ -762,6 +787,8 @@ union all select 'replacement_level_mismatch',          count(*) from qa.replace
 union all select 'points_split_mismatch',               count(*) from qa.points_split_mismatch
 union all select 'identity_metric_unknown',             count(*) from qa.identity_metric_unknown
 union all select 'formation_unknown',                   count(*) from qa.formation_unknown
-union all select 'precomputed_problem',                 count(*) from qa.precomputed_problem;
+union all select 'precomputed_problem',                 count(*) from qa.precomputed_problem
+union all select 'week_rank_duplicates',                count(*) from qa.week_rank_duplicates
+union all select 'week_rank_missing',                   count(*) from qa.week_rank_missing;
 
 comment on view qa.summary is 'Problem count for every check. All zeros means the history is consistent.';
